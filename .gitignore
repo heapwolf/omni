@@ -1,0 +1,7 @@
+App
+.build/
+**/.build/
+**/.omni/
+.swiftpm/
+docs/
+.DS_Store
