@@ -1,0 +1,2 @@
+activity com.google.android.play.core.common.PlayCoreDialogWrapperActivity  # com.google.android.play:core-common:2.0.4
+meta-data com.google.android.gms.version  # com.google.android.gms:play-services-basement:18.9.0

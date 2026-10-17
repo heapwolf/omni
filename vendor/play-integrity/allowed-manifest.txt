@@ -1,0 +1,8 @@
+# Each manifest entry the vendored libraries declare, reviewed. vendor.py
+# fails on any other. "add": omni's builder declares it (manifest-fragment.xml);
+# "omit": not declared, so nothing can start it.
+#
+# Play services' version check, which basement reads.
+add meta-data com.google.android.gms.version
+# Play's fix-it dialogs (exported="false"); the bridge never asks for one.
+omit activity com.google.android.play.core.common.PlayCoreDialogWrapperActivity
