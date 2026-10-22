@@ -1059,8 +1059,7 @@ public struct AndroidBuilder {
         }
 
         let soName = "lib\(product).so"
-        let builtSO = "\(scratch)/\(triple)/debug/\(soName)"
-        guard fm.fileExists(atPath: builtSO) else {
+        guard let builtSO = Self.builtLibrary(soName, in: scratch, triple: triple, fm: fm) else {
             throw AndroidError.missing("""
                 \(soName) was not produced.
                 Package.swift must declare the app as a dynamic library, e.g.
@@ -1472,6 +1471,27 @@ public struct AndroidDeployer {
                   adb logcat -b crash -d
                   adb logcat -d | grep -E 'AndroidRuntime|DEBUG|libc|linker'
                 """)
+        }
+    }
+}
+
+extension AndroidBuilder {
+    /// `<triple>/debug/`, or `out/Products/<Config>-android-<arch>/` from Swift 6.4.
+    static func builtLibrary(_ soName: String, in scratch: String, triple: String, fm: FileManager) -> String? {
+        let legacy = "\(scratch)/\(triple)/debug/\(soName)"
+        if fm.fileExists(atPath: legacy) { return legacy }
+        let products = "\(scratch)/out/Products"
+        let arch = triple.split(separator: "-").first.map(String.init) ?? ""
+        let candidates = ((try? fm.contentsOfDirectory(atPath: products)) ?? [])
+            .filter { $0.hasSuffix("-android-\(arch)") }
+            .map { "\(products)/\($0)/\(soName)" }
+            .filter { fm.fileExists(atPath: $0) }
+        // Newest.
+        return candidates.max { a, b in
+            let date = { (path: String) in
+                (try? fm.attributesOfItem(atPath: path)[.modificationDate] as? Date) ?? .distantPast
+            }
+            return date(a) < date(b)
         }
     }
 }
