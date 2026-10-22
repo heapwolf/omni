@@ -1,7 +1,7 @@
 // Values baked in at build time from omni.json's `flags` section:
 //
 //   omni run --flags dev,mock          # profiles, merged left to right
-//   omni run --flag apiBase=http://…   # one value, applied last
+//   omni run --flag apiBase=http://...   # one value, applied last
 //
 // Read-only, and fixed for the life of the process. Launch arguments of the
 // form `--omni-flag key=value` override the baked-in values, for flipping one

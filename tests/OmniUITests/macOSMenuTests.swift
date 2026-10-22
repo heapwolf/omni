@@ -11,12 +11,12 @@ import AppKit
     var body: some View {
         Text("x").commands {
             Menu(applicationItems: {
-                MenuAction("Settings…", shortcut: ",") { taps.go.append("settings") }
+                MenuAction("Settings...", shortcut: ",") { taps.go.append("settings") }
             })
             Menu("Go") {
                 MenuAction("Users", shortcut: "1") { taps.go.append("users") }
                 MenuDivider()
-                MenuAction("Find…", shortcut: "f", modifiers: [.command, .shift]) { taps.go.append("find") }
+                MenuAction("Find...", shortcut: "f", modifiers: [.command, .shift]) { taps.go.append("find") }
                 MenuAction("Ledger", isEnabled: false) { taps.go.append("ledger") }
             }
             Menu("File") { MenuAction("Sign Out") { taps.go.append("out") } }
@@ -43,7 +43,7 @@ final class macOSMenuTests: XCTestCase {
 
             let app = try! XCTUnwrap(bar.items[0].submenu)
             XCTAssertEqual(app.items.first?.title, "About Office")
-            XCTAssertEqual(app.items[2].title, "Settings…", "the app's items, after About")
+            XCTAssertEqual(app.items[2].title, "Settings...", "the app's items, after About")
             XCTAssertEqual(app.items.last?.title, "Quit Office")
 
             let edit = try! XCTUnwrap(bar.items[2].submenu)

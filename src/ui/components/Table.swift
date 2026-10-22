@@ -5,7 +5,7 @@ import Foundation
 // actions on every row, and columns that can be hidden.
 //
 //   Table(users, id: \.id, selection: $selected, sort: $sort,
-//         actions: { user in [ActionItem("Restrict", isDestructive: true) { … }] },
+//         actions: { user in [ActionItem("Restrict", isDestructive: true) { ... }] },
 //         onOpen: { user in open(user) }) {
 //       TableColumn("Name", compact: true) { TableCell($0.name) }
 //       TableColumn("Email", sortKey: "email") { TableCell($0.email, style: .secondary) }

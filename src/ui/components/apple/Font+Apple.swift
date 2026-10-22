@@ -162,7 +162,7 @@ extension Font {
 
 public extension Font {
     /// Registers every face in the file at `path` under `family`. Register a
-    /// family's files under one name (Regular, Bold, … or one variable file
+    /// family's files under one name (Regular, Bold, ... or one variable file
     /// and its italic) and a Font in that family picks the face for its weight.
     @discardableResult
     @MainActor static func register(_ path: String, as family: String) -> Bool {
@@ -216,7 +216,7 @@ public extension Font {
     }
 
     /// `Fonts/` beside the Package.swift above the running executable, which
-    /// SwiftPM builds into `<package>/.build/…`.
+    /// SwiftPM builds into `<package>/.build/...`.
     private static func packageFonts() -> URL? {
         let fm = FileManager.default
         var folder = Bundle.main.executableURL?.deletingLastPathComponent()

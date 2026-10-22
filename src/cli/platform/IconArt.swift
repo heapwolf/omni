@@ -151,7 +151,7 @@ private enum Noise {
 /// (distance to shape, softened across one pixel), not supersampled.
 private struct Canvas {
     let size: Int
-    private var pixels: [Double]   // r,g,b per pixel, 0…1
+    private var pixels: [Double]   // r,g,b per pixel, 0...1
 
     init(size: Int) {
         self.size = size

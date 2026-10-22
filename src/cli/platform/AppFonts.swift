@@ -5,7 +5,7 @@
 //   Fonts/Inter/InterVariable-Italic.ttf
 //
 // Copied into the bundle under the same layout, where OmniUI registers each
-// file under its folder's name before the first render: Font.custom("Inter", …)
+// file under its folder's name before the first render: Font.custom("Inter", ...)
 // then picks the face for its weight. Where the build puts them:
 //   iOS      Fonts/ in the .app
 //   macOS    Fonts/ in Contents/Resources
@@ -48,7 +48,7 @@ struct AppFonts {
         return lowered.hasSuffix(".ttf") || lowered.hasSuffix(".otf")
     }
 
-    /// Writes `directory/Fonts/<Family>/…`, replacing what a previous build
+    /// Writes `directory/Fonts/<Family>/...`, replacing what a previous build
     /// left: bundles are reused between builds, and a removed font must go.
     func copy(into directory: String) throws {
         let fm = FileManager.default

@@ -205,7 +205,7 @@ public extension ProbeDriver {
     private func describeScreen() -> String {
         let lines = locateAll().filter(\.element.isVisible).map(\.element.description)
         // Enough to see where it is, not a page of every glyph.
-        return lines.prefix(120).joined(separator: "\n") + (lines.count > 120 ? "\n…" : "")
+        return lines.prefix(120).joined(separator: "\n") + (lines.count > 120 ? "\n..." : "")
     }
 
     /// The one visible element the query means, waiting briefly for it.

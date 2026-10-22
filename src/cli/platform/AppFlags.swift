@@ -1,7 +1,7 @@
 // omni.json's `flags` section: named profiles of values baked into the app,
 // read at runtime through OmniUI's `Flags`.
 //
-//   { "flags": { "dev": { "apiBase": "https://staging…" }, "mock": { "api": "mock" } } }
+//   { "flags": { "dev": { "apiBase": "https://staging..." }, "mock": { "api": "mock" } } }
 //
 //   omni run --flags dev,mock --flag verbose=true
 //

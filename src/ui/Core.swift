@@ -548,7 +548,7 @@ public struct EmptyView: OmniStructuralView {
     /// session loads shows a screen. Set by each platform's launch.
     static var rootHost: ((NativeView?) -> Void)?
     public static var safeArea: SafeArea = SafeArea(top: 0, bottom: 0)
-    /// The app's name, for its menus ("About …", "Quit …"): the window's title.
+    /// The app's name, for its menus ("About ...", "Quit ..."): the window's title.
     public static var appName: String?
 
     private static var rendering: Set<ObjectIdentifier> = []

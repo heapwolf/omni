@@ -296,7 +296,7 @@ public struct ModifierView: NativeComponent {
 
         #if os(Linux)
             // GTK Layout & Padding implementation
-            // GTK's size request is a minimum: a fixed size, else .frame(min…:).
+            // GTK's size request is a minimum: a fixed size, else .frame(min...:).
             let w = (width ?? minWidth).map { Int32($0) } ?? -1
             let h = (height ?? minHeight).map { Int32($0) } ?? -1
             gtk_widget_set_size_request(view, w, h)
@@ -758,8 +758,8 @@ public struct ForegroundColorModifier: ViewModifier {
 // MARK: - View Extensions
 
 public extension View {
-    /// A fixed size, or SwiftUI's flexible frame: at least `min…`, at most
-    /// `max…` (`.infinity` takes the surplus), in SwiftUI's argument order.
+    /// A fixed size, or SwiftUI's flexible frame: at least `min...`, at most
+    /// `max...` (`.infinity` takes the surplus), in SwiftUI's argument order.
     func frame(width: Double? = nil, height: Double? = nil,
                minWidth: Double? = nil, maxWidth: Double? = nil,
                minHeight: Double? = nil, maxHeight: Double? = nil,

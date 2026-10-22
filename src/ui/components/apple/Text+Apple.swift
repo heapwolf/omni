@@ -10,7 +10,7 @@ import UIKit
 #if os(macOS)
 /// A label as wide as its cell draws it. NSTextField reports a natural width a
 /// few points under what its cell needs (146.5 for 150.03 in semibold), and
-/// laid out to the whole point below that, the last word was cut to "…".
+/// laid out to the whole point below that, the last word was cut to "...".
 ///
 /// A label of more than one line wraps at the width it is laid out to, as a
 /// UILabel does: AppKit's needs that width told to it (preferredMaxLayoutWidth)
@@ -62,6 +62,27 @@ final class OmniTextLabel: UILabel {
     private var press: UILongPressGestureRecognizer?
     /// The UIEditMenuInteraction, from iOS 16; UIMenuController before it.
     private var menu: AnyObject?
+
+    /// A label of more than one line wraps at the width it's laid out to, told
+    /// to it each time that width changes. Left to itself, a UILabel keeps the
+    /// width of its first layout: one made before its screen had its width (a
+    /// tab's first appearance) wrapped a word to a line until the app was
+    /// opened again. As OmniLabel does on macOS.
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        guard numberOfLines != 1, bounds.width > 0, preferredMaxLayoutWidth != bounds.width else { return }
+        preferredMaxLayoutWidth = bounds.width
+        invalidateIntrinsicContentSize()
+    }
+
+    /// Its one-line width even when it wraps, so a stack gives it the room it
+    /// has and it wraps only past that; its height, at the width it wraps to.
+    override var intrinsicContentSize: CGSize {
+        let natural = super.intrinsicContentSize
+        guard numberOfLines != 1, natural.width > 0 else { return natural }
+        let oneLine = sizeThatFits(CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude))
+        return CGSize(width: max(natural.width, oneLine.width.rounded(.up)), height: natural.height)
+    }
 
     override var canBecomeFirstResponder: Bool { isCopyable }
 

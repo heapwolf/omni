@@ -23,7 +23,7 @@ struct Message {
 
 let inbox = [
     Message(id: 1, sender: "Ada Lovelace", subject: "Analytical engine notes",
-            preview: "The engine weaves algebraic patterns…", unread: true),
+            preview: "The engine weaves algebraic patterns...", unread: true),
     Message(id: 2, sender: "Grace Hopper", subject: "Found a bug",
             preview: "Literally. It was a moth in relay 70.", unread: true),
     Message(id: 3, sender: "Alan Turing", subject: "On computable numbers",
@@ -271,7 +271,7 @@ struct ProfileScreen: View {
 
                 HStack(spacing: 12) {
                     // photoStatus is written synchronously first, before the
-                    // Task exists. If the label changes to "tapped…" the button
+                    // Task exists. If the label changes to "tapped..." the button
                     // and the re-render are fine and the async path is at fault;
                     // if it does not change at all, the action never ran.
                     Button("Take Photo", action: {
@@ -279,7 +279,7 @@ struct ProfileScreen: View {
                         // half is broken: the action itself, the Task body, and
                         // the first await. adb logcat -s Omni:I OmniCamera:I
                         Omni.log("1. button action ran")
-                        photoStatus = "tapped, starting capture…"
+                        photoStatus = "tapped, starting capture..."
                         Self.capture(into: $photo, status: $photoStatus)
                     })
                         .foregroundColor(.rgba(r: 1, g: 1, b: 1, a: 1))
@@ -287,7 +287,7 @@ struct ProfileScreen: View {
                         .background(.blue)
 
                     Button("Choose Photo", action: {
-                        photoStatus = "tapped, starting pick…"
+                        photoStatus = "tapped, starting pick..."
                         Self.pick(into: $photo, status: $photoStatus)
                     })
                         .padding(horizontal: 16, vertical: 10)
@@ -366,7 +366,7 @@ struct ProfileScreen: View {
 /// screen proves needs a server. What it proves is the two hooks, which are the
 /// reason the component exists:
 ///
-///   - **Pay** navigates to `omni://checkout/done?token=…`. `decidePolicy`
+///   - **Pay** navigates to `omni://checkout/done?token=...`. `decidePolicy`
 ///     cancels that navigation and reads the token off it — exactly how a
 ///     hosted checkout hands a result back, minus the hosting.
 ///   - **Send a message** calls `window.omni.postMessage`, which is the same
@@ -395,7 +395,7 @@ private let demoPage = """
 <button onclick="omni.postMessage(JSON.stringify({event:'ready',amount:1200}))">
   Send a message to the app
 </button>
-<div id="ping">waiting for the app…</div>
+<div id="ping">waiting for the app...</div>
 """
 
 /// Built once, when the node first adopts the object — `@StateObject`'s

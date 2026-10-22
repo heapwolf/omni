@@ -35,6 +35,10 @@ public class OmniCanvasView: UIView {
     public override init(frame: CGRect) {
         super.init(frame: frame)
         self.backgroundColor = .clear
+        // Drawn again at each new size. UIKit's default stretches what was
+        // drawn before: a canvas first drawn before it had its size (a tab's
+        // first appearance, the card art) stayed blank.
+        self.contentMode = .redraw
     }
     required init?(coder: NSCoder) { fatalError() }
 
