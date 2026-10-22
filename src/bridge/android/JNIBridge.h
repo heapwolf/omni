@@ -168,6 +168,19 @@ uint8_t* omni_jni_device_key_sign(JNIEnv *env, jobject context, const char *tag,
                                   const uint8_t *message, int length, int *outLength);
 int      omni_jni_device_key_delete(JNIEnv *env, jobject context, const char *tag);
 
+// MARK: - Approval keys (OmniKeychain)
+/// 1 if a strong biometric is usable, else 0.
+int      omni_jni_approval_biometry(JNIEnv *env, jobject context);
+int      omni_jni_approval_key_has(JNIEnv *env, jobject context, const char *tag);
+/// Replaces any key. x9.63, malloc'd, or NULL.
+uint8_t* omni_jni_approval_key_create(JNIEnv *env, jobject context, const char *tag, int *outLength);
+int      omni_jni_approval_key_delete(JNIEnv *env, jobject context, const char *tag);
+/// Prompts, then signs. DER, malloc'd, or NULL with `*outStatus`: 1 cancelled,
+/// 2 invalidated, 3 not found, 4 failed. Blocks: call on its own thread.
+uint8_t* omni_jni_approval_key_sign(const char *tag, const uint8_t *message, int length,
+                                    const char *title, const char *reason, const char *cancel,
+                                    int *outLength, int *outStatus);
+
 /// Play Integrity (OmniKeychain): a token for `requestHash`, malloc'd, or NULL
 /// when the app wasn't built with it or it failed. Blocks: call it on a
 /// thread of its own, which this attaches to the VM and detaches again.

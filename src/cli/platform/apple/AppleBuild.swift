@@ -541,6 +541,9 @@ public struct AppleBuilder {
             <string>\(target) uses the camera to take a photo you choose to capture.</string>
             <key>NSPhotoLibraryUsageDescription</key>
             <string>\(target) uses your photo library to choose a photo you select.</string>
+            <!-- Approval keys. Without it, Face ID crashes. -->
+            <key>NSFaceIDUsageDescription</key>
+            <string>\(target) uses Face ID to unlock and approve payments.</string>
         \(iconFragment)
         </dict>
         </plist>

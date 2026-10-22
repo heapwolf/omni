@@ -69,7 +69,7 @@ Take only what you use.
 | `OmniUI`       | Views, state, navigation          |
 | `OmniData`     | SwiftData-style models on SQLite  |
 | `OmniHTTP`     | `fetch`                           |
-| `OmniKeychain` | Secrets, device keys, attestation |
+| `OmniKeychain` | Secrets, device and Face ID keys  |
 | `OmniCamera`   | Capture, photo picker             |
 | `OmniProbe`    | End-to-end tests. Never shipped.  |
 
@@ -80,6 +80,11 @@ let user = try await fetch(url).json(User.self)
 ```swift
 try Keychain.default.setString(token, for: "token")
 let token = try Keychain.default.getString("token")
+```
+
+```swift
+let signature = try await ApprovalKeys.default.sign(payload, with: "approval",
+                                                    prompt: ApprovalPrompt(reason: "Approve $25.00", cancel: "Use PIN"))
 ```
 
 ```swift
