@@ -1579,6 +1579,125 @@ int omni_jni_device_key_delete(JNIEnv *env, jobject context, const char *tag) {
     return removed ? 1 : 0;
 }
 
+// MARK: - Approval keys (OmniKeychain)
+
+static jclass omni_approval_key_class(JNIEnv *env) {
+    jclass clazz = (*env)->FindClass(env, "com/omni/OmniApprovalKey");
+    if (!clazz) omni_jni_clear_pending(env);
+    return clazz;
+}
+
+int omni_jni_approval_biometry(JNIEnv *env, jobject context) {
+    jclass clazz = omni_approval_key_class(env);
+    if (!clazz) return 0;
+    jmethodID method = (*env)->GetStaticMethodID(env, clazz, "biometry", "(Landroid/content/Context;)I");
+    if (!method) { omni_jni_clear_pending(env); (*env)->DeleteLocalRef(env, clazz); return 0; }
+    jint value = (*env)->CallStaticIntMethod(env, clazz, method, context);
+    omni_jni_clear_pending(env);
+    (*env)->DeleteLocalRef(env, clazz);
+    return (int)value;
+}
+
+int omni_jni_approval_key_has(JNIEnv *env, jobject context, const char *tag) {
+    jclass clazz = omni_approval_key_class(env);
+    if (!clazz) return 0;
+    jmethodID method = (*env)->GetStaticMethodID(env, clazz, "has", "(Landroid/content/Context;Ljava/lang/String;)Z");
+    if (!method) { omni_jni_clear_pending(env); (*env)->DeleteLocalRef(env, clazz); return 0; }
+    jstring jTag = (*env)->NewStringUTF(env, tag);
+    jboolean found = (*env)->CallStaticBooleanMethod(env, clazz, method, context, jTag);
+    omni_jni_clear_pending(env);
+    (*env)->DeleteLocalRef(env, jTag);
+    (*env)->DeleteLocalRef(env, clazz);
+    return found ? 1 : 0;
+}
+
+uint8_t* omni_jni_approval_key_create(JNIEnv *env, jobject context, const char *tag, int *outLength) {
+    *outLength = 0;
+    jclass clazz = omni_approval_key_class(env);
+    if (!clazz) return NULL;
+    jmethodID method = (*env)->GetStaticMethodID(env, clazz, "create",
+        "(Landroid/content/Context;Ljava/lang/String;)[B");
+    if (!method) { omni_jni_clear_pending(env); (*env)->DeleteLocalRef(env, clazz); return NULL; }
+    jstring jTag = (*env)->NewStringUTF(env, tag);
+    jbyteArray jBytes = (jbyteArray)(*env)->CallStaticObjectMethod(env, clazz, method, context, jTag);
+    omni_jni_clear_pending(env);
+    (*env)->DeleteLocalRef(env, jTag);
+    (*env)->DeleteLocalRef(env, clazz);
+    return omni_jni_copy_bytes(env, jBytes, outLength);
+}
+
+int omni_jni_approval_key_delete(JNIEnv *env, jobject context, const char *tag) {
+    jclass clazz = omni_approval_key_class(env);
+    if (!clazz) return 0;
+    jmethodID method = (*env)->GetStaticMethodID(env, clazz, "delete", "(Landroid/content/Context;Ljava/lang/String;)Z");
+    if (!method) { omni_jni_clear_pending(env); (*env)->DeleteLocalRef(env, clazz); return 0; }
+    jstring jTag = (*env)->NewStringUTF(env, tag);
+    jboolean removed = (*env)->CallStaticBooleanMethod(env, clazz, method, context, jTag);
+    omni_jni_clear_pending(env);
+    (*env)->DeleteLocalRef(env, jTag);
+    (*env)->DeleteLocalRef(env, clazz);
+    return removed ? 1 : 0;
+}
+
+uint8_t* omni_jni_approval_key_sign(const char *tag, const uint8_t *message, int length,
+                                    const char *title, const char *reason, const char *cancel,
+                                    int *outLength, int *outStatus) {
+    *outLength = 0;
+    *outStatus = 4;
+    if (!global_jvm || !global_activity) return NULL;
+    JNIEnv *env = NULL;
+    int attached = 0;
+    if ((*global_jvm)->GetEnv(global_jvm, (void **)&env, JNI_VERSION_1_6) == JNI_EDETACHED) {
+        if ((*global_jvm)->AttachCurrentThread(global_jvm, &env, NULL) != JNI_OK) return NULL;
+        attached = 1;
+    }
+    uint8_t *result = NULL;
+
+    // The app's class loader: FindClass on an attached thread sees only the system's.
+    jclass activityClass = (*env)->GetObjectClass(env, global_activity);
+    jmethodID getLoader = (*env)->GetMethodID(env, activityClass, "getClassLoader", "()Ljava/lang/ClassLoader;");
+    jobject loader = getLoader ? (*env)->CallObjectMethod(env, global_activity, getLoader) : NULL;
+    omni_jni_clear_pending(env);
+    jclass loaderClass = loader ? (*env)->GetObjectClass(env, loader) : NULL;
+    jmethodID loadClass = loaderClass
+        ? (*env)->GetMethodID(env, loaderClass, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;") : NULL;
+    jstring name = (*env)->NewStringUTF(env, "com.omni.OmniApprovalKey");
+    jclass clazz = loadClass ? (jclass)(*env)->CallObjectMethod(env, loader, loadClass, name) : NULL;
+    omni_jni_clear_pending(env);
+
+    jmethodID sign = clazz ? (*env)->GetStaticMethodID(env, clazz, "sign",
+        "(Landroid/app/Activity;Ljava/lang/String;[BLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)[B") : NULL;
+    jfieldID status = clazz ? (*env)->GetStaticFieldID(env, clazz, "lastStatus", "I") : NULL;
+    omni_jni_clear_pending(env);
+    if (sign && status) {
+        jstring jTag = (*env)->NewStringUTF(env, tag);
+        jstring jTitle = (*env)->NewStringUTF(env, title);
+        jstring jReason = (*env)->NewStringUTF(env, reason);
+        jstring jCancel = (*env)->NewStringUTF(env, cancel);
+        jbyteArray jMessage = (*env)->NewByteArray(env, length);
+        (*env)->SetByteArrayRegion(env, jMessage, 0, length, (const jbyte *)message);
+        jbyteArray jBytes = (jbyteArray)(*env)->CallStaticObjectMethod(env, clazz, sign, global_activity, jTag,
+                                                                     jMessage, jTitle, jReason, jCancel);
+        omni_jni_clear_pending(env);
+        *outStatus = (int)(*env)->GetStaticIntField(env, clazz, status);
+        result = omni_jni_copy_bytes(env, jBytes, outLength);
+        if (result) *outStatus = 0;
+        (*env)->DeleteLocalRef(env, jMessage);
+        (*env)->DeleteLocalRef(env, jCancel);
+        (*env)->DeleteLocalRef(env, jReason);
+        (*env)->DeleteLocalRef(env, jTitle);
+        (*env)->DeleteLocalRef(env, jTag);
+    }
+
+    (*env)->DeleteLocalRef(env, name);
+    if (clazz) (*env)->DeleteLocalRef(env, clazz);
+    if (loaderClass) (*env)->DeleteLocalRef(env, loaderClass);
+    if (loader) (*env)->DeleteLocalRef(env, loader);
+    (*env)->DeleteLocalRef(env, activityClass);
+    if (attached) (*global_jvm)->DetachCurrentThread(global_jvm);
+    return result;
+}
+
 // MARK: - Play Integrity (OmniKeychain)
 
 char* omni_jni_attest_token(const char *requestHash) {

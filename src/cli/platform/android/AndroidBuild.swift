@@ -1235,6 +1235,9 @@ public struct AndroidBuilder {
                  linked, and an unused permission costs nothing at runtime. -->
             <uses-permission android:name="android.permission.CAMERA" />
 
+            <!-- OmniKeychain's approval keys show the biometric prompt. -->
+            <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+
             <application android:label="\(product)"
                          android:theme="@android:style/Theme.DeviceDefault.Light.NoActionBar"
                          android:extractNativeLibs="true"

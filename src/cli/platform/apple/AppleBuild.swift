@@ -541,6 +541,10 @@ public struct AppleBuilder {
             <string>\(target) uses the camera to take a photo you choose to capture.</string>
             <key>NSPhotoLibraryUsageDescription</key>
             <string>\(target) uses your photo library to choose a photo you select.</string>
+            <!-- The same, for OmniKeychain's approval keys: without it, the first
+                 Face ID prompt crashes the app. -->
+            <key>NSFaceIDUsageDescription</key>
+            <string>\(target) uses Face ID to unlock and to approve payments you make.</string>
         \(iconFragment)
         </dict>
         </plist>
