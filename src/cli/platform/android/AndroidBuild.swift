@@ -350,7 +350,10 @@ struct AndroidToolchain {
 
         let version = "r28b"
         let installed = "\(root)/android-ndk-\(version)"
-        if fm.fileExists(atPath: "\(installed)/source.properties") { return installed }
+        if fm.fileExists(atPath: "\(installed)/source.properties") {
+            stripPythonInstallers(installed)
+            return installed
+        }
 
         let archive = "\(root)/ndk-\(version).zip"
         try download("https://dl.google.com/android/repository/android-ndk-\(version)-\(osSlug).zip",
@@ -367,7 +370,16 @@ struct AndroidToolchain {
                   export ANDROID_NDK_HOME=~/.omni/toolchain/android-ndk-\(version)
                 """)
         }
+        stripPythonInstallers(installed)
         return installed
+    }
+
+    /// The NDK's Python without pip and setuptools (NDKPython says why).
+    private func stripPythonInstallers(_ ndk: String) {
+        let gone = NDKPython.stripInstallers(ndk: ndk, hostTag: ndkHostTag)
+        if !gone.isEmpty {
+            Console.info("removed the NDK Python's package installers (pip, setuptools): nothing builds with them, and their CA store is out of date")
+        }
     }
 
     /// JAVA_HOME, a JDK on PATH, or a Temurin build from Adoptium.
