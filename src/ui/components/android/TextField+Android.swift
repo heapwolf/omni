@@ -8,6 +8,7 @@ extension TextField {
     @MainActor public func makeNative() -> NativeView {
         let env = OmniAndroid.env
         let view = OmniAndroid.createView(env, "android/widget/EditText")
+        OmniAndroid.makePlainField(view)
         AndroidExpansion.claim(view, horizontal: true, vertical: false)
         return view
     }

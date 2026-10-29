@@ -17,7 +17,7 @@ extension SystemButtonPrimitive {
         omni_jni_call_void_method_int(env, view, "setMinWidth", 0)
         omni_jni_call_void_method_int(env, view, "setMinHeight", 0)
 
-        omni_jni_set_text_color(env, view, 255, 0, 0, 0)
+        OmniAndroid.setTextColor(view, .primaryText)
 
         return view
     }

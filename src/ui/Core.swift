@@ -902,6 +902,13 @@ public struct EmptyView: OmniStructuralView {
                 #else
                 let keepsKids = false
                 #endif
+                // Kept kids' natives come out and go back in below; a text
+                // input among them that's being typed into would lose focus,
+                // and on iOS the keyboard would go, a second after typing in a
+                // search whose results added or took away a section beside it.
+                #if os(macOS) || os(iOS)
+                let keptFocus = keepsKids ? KeptFocus.inside(node.native) : nil
+                #endif
                 var remaining = keepsKids ? node.kids : []
                 if !keepsKids { node.kids.forEach { $0.unmount() } }
                 var next: [Node] = []
@@ -932,6 +939,9 @@ public struct EmptyView: OmniStructuralView {
                         #endif
                     }
                 }
+                #if os(macOS) || os(iOS)
+                keptFocus?.restore()
+                #endif
 
                 #if os(iOS)
                 if let (snap, direction) = navTransitionSnapshot,
@@ -1392,14 +1402,23 @@ public extension App {
             vc.view.addSubview(host)
 
             let guide = vc.view.safeAreaLayoutGuide
+            // The keyboard's top, which is the safe area's bottom while it is
+            // hidden: content moves up out of its way, as in SwiftUI. Unless a
+            // view asks the keyboard to cover it (Keyboard.coversContent).
+            let aboveKeyboard = host.bottomAnchor.constraint(equalTo: vc.view.keyboardLayoutGuide.topAnchor)
+            let underKeyboard = host.bottomAnchor.constraint(equalTo: guide.bottomAnchor)
             NSLayoutConstraint.activate([
                 host.topAnchor.constraint(equalTo: guide.topAnchor),
-                // The keyboard's top, which is the safe area's bottom while it is
-                // hidden: content moves up out of its way, as in SwiftUI.
-                host.bottomAnchor.constraint(equalTo: vc.view.keyboardLayoutGuide.topAnchor),
+                Keyboard.coversContent ? underKeyboard : aboveKeyboard,
                 host.leadingAnchor.constraint(equalTo: guide.leadingAnchor),
                 host.trailingAnchor.constraint(equalTo: guide.trailingAnchor)
             ])
+            Keyboard.onCoversContentChange = { [weak vc] covers in
+                // One off before the other on, so the two never conflict.
+                (covers ? aboveKeyboard : underKeyboard).isActive = false
+                (covers ? underKeyboard : aboveKeyboard).isActive = true
+                vc?.view.layoutIfNeeded()
+            }
             Engine.rootHost = { [weak host] native in
                 guard let host else { return }
                 host.subviews.forEach { $0.removeFromSuperview() }
@@ -1416,10 +1435,7 @@ public extension App {
             }
             Engine.rootHost?(Engine.root?.native)
 
-            let tap = UITapGestureRecognizer(target: self, action: #selector(dismissKeyboard))
-            tap.cancelsTouchesInView = false
-            tap.delegate = self
-            vc.view.addGestureRecognizer(tap)
+            installKeyboardDismiss(on: vc.view)
 
             w.rootViewController = vc
             w.makeKeyAndVisible()
@@ -1440,8 +1456,18 @@ public extension App {
         func sceneDidEnterBackground(_ scene: UIScene) { AppLifecycle.enter(.background) }
         func sceneWillEnterForeground(_ scene: UIScene) { AppLifecycle.enter(.foreground) }
 
-        @objc func dismissKeyboard() {
-            window?.endEditing(true)
+        /// A tap outside a control puts the keyboard away: on the window's
+        /// root, and on each sheet's view, which the root's doesn't reach.
+        func installKeyboardDismiss(on view: UIView) {
+            let tap = UITapGestureRecognizer(target: self, action: #selector(dismissKeyboard(_:)))
+            tap.cancelsTouchesInView = false
+            tap.delegate = self
+            view.addGestureRecognizer(tap)
+        }
+
+        @objc func dismissKeyboard(_ tap: UITapGestureRecognizer) {
+            // The sheet's own window when it has one; the app's otherwise.
+            (tap.view?.window ?? window)?.endEditing(true)
         }
     }
 
@@ -1669,3 +1695,75 @@ public struct Group<Content: View>: OmniStructuralView {
     public var body: Never { fatalError("Engine unpacks Group dynamically") }
     public var unpacked: [any View] { Omni.unpackViews(content) }
 }
+
+#if os(iOS)
+import UIKit
+
+/// The text input being typed into, so a render that takes its view out and
+/// puts it back can give it focus again (Engine.renderBody).
+@MainActor struct KeptFocus {
+    let input: UIView
+    let selection: UITextRange?
+
+    /// The focused field or editor, if it's inside `container`.
+    static func inside(_ container: NativeView?) -> KeptFocus? {
+        Tracking.start()
+        guard let container, let input = Tracking.current, input.isFirstResponder,
+              input.isDescendant(of: container) else { return nil }
+        return KeptFocus(input: input, selection: (input as? UITextInput)?.selectedTextRange)
+    }
+
+    func restore() {
+        guard input.window != nil, !input.isFirstResponder else { return }
+        input.becomeFirstResponder()
+        if let selection { (input as? UITextInput)?.selectedTextRange = selection }
+    }
+
+    /// Follows editing as it starts, rather than searching the views on each render.
+    @MainActor enum Tracking {
+        static weak var current: UIView?
+        private static var started = false
+
+        static func start() {
+            guard !started else { return }
+            started = true
+            let center = NotificationCenter.default
+            for name in [UITextField.textDidBeginEditingNotification, UITextView.textDidBeginEditingNotification] {
+                center.addObserver(forName: name, object: nil, queue: .main) { note in
+                    let view = note.object as? UIView
+                    MainActor.assumeIsolated { current = view }
+                }
+            }
+        }
+    }
+}
+#elseif os(macOS)
+import AppKit
+
+/// The text input being typed into, so a render that takes its view out and
+/// puts it back can give it focus again (Engine.renderBody).
+@MainActor struct KeptFocus {
+    let input: NSView
+    let selection: NSRange?
+
+    /// The field (through its field editor) or editor being typed into, if
+    /// it's inside `container`.
+    static func inside(_ container: NativeView?) -> KeptFocus? {
+        guard let container, let editor = container.window?.firstResponder as? NSTextView else { return nil }
+        // A field's editor is the window's, its delegate the field; an editor is itself.
+        let input = (editor.delegate as? NSTextField) ?? editor
+        guard input.isDescendant(of: container) else { return nil }
+        return KeptFocus(input: input, selection: editor.selectedRange())
+    }
+
+    func restore() {
+        guard let window = input.window else { return }
+        if let editor = window.firstResponder as? NSTextView, editor === input || editor.delegate === input { return }
+        window.makeFirstResponder(input)
+        if let selection, let editor = window.firstResponder as? NSTextView,
+           NSMaxRange(selection) <= (editor.string as NSString).length {
+            editor.setSelectedRange(selection)
+        }
+    }
+}
+#endif

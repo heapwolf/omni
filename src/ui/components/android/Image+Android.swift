@@ -5,11 +5,16 @@ import CAndroid
 extension Image {
     @MainActor public func makeNative() -> NativeView {
         let env = OmniAndroid.env
-        return OmniAndroid.createView(env, "android/widget/ImageView")
+        let view = OmniAndroid.createView(env, "android/widget/ImageView")
+        // Resizable, it takes the space offered, as iOS's low hugging does, rather
+        // than its picture's own size: a card's artwork drew small in its frame.
+        if isResizable { AndroidExpansion.claim(view, horizontal: true, vertical: true) }
+        return view
     }
 
     @MainActor public func updateNative(_ view: NativeView) {
         let env = OmniAndroid.env
+        omni_jni_set_image_scale(env, view, isResizable && contentMode == .fill ? 1 : 0)
 
         if let data {
             let bytes = [UInt8](data)

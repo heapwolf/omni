@@ -50,6 +50,9 @@ public class OmniCanvasView extends View {
         currentStrokeColor = Color.BLACK;
         currentFillColor = Color.BLACK;
         currentStrokeWidth = 2.0f;
+        // New commands follow in this same pass; the draw comes after it.
+        // Without this, a canvas redrew only when its size changed.
+        invalidate();
     }
 
     public void beginPath() {

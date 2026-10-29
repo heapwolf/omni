@@ -20,6 +20,7 @@ extension Stack {
                 OmniAndroid.env, child, vertical ? 1 : 0,
                 AndroidExpansion.wants(child, horizontal: vertical) ? 1 : 0,
                 AndroidExpansion.wants(child, horizontal: !vertical) ? 1 : 0)
+            AndroidExpansion.settle(child, vertical: vertical)
         }
     }
 

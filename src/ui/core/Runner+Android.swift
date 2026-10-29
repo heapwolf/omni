@@ -6,15 +6,18 @@
     extension OmniAndroid {
         /// Boots an app from the JVM. The generated JNI entry point calls this
         /// and nothing else, so applications never see JNIEnv or jobject.
+        /// The app is made after JNI is set up, not before: an argument is
+        /// evaluated first, and an app whose init reads a file (a saved
+        /// appearance, under AppDirectories) died for want of a JNI environment.
         @MainActor
         public static func launch(
-            _ app: any App,
+            _ app: @autoclosure @MainActor () -> any App,
             env: UnsafeMutablePointer<JNIEnv?>?,
             activity: jobject?
         ) {
             guard let env, let activity else { return }
             omni_jni_init(env, activity)
-            AndroidRunner().run(app)
+            AndroidRunner().run(app())
         }
     }
 

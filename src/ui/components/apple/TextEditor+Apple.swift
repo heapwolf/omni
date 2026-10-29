@@ -27,6 +27,7 @@ import UIKit
 // UITextView is not a UIControl either; self-delegating for the same reason.
 public class OmniTextView: UITextView, UITextViewDelegate {
     var onChange: ((String) -> Void)?
+    var onFocus: ((Bool) -> Void)?
 
     override init(frame: CGRect, textContainer: NSTextContainer?) {
         super.init(frame: frame, textContainer: textContainer)
@@ -37,6 +38,9 @@ public class OmniTextView: UITextView, UITextViewDelegate {
     public func textViewDidChange(_ textView: UITextView) {
         onChange?(textView.text)
     }
+
+    public func textViewDidBeginEditing(_ textView: UITextView) { onFocus?(true) }
+    public func textViewDidEndEditing(_ textView: UITextView) { onFocus?(false) }
 }
 #endif
 
@@ -107,6 +111,26 @@ extension TextEditor {
                     tv.text = binding.wrappedValue
                 }
                 tv.onChange = { newText in binding.wrappedValue = newText }
+                let plain = style == .plain
+                tv.layer.borderWidth = plain ? 0 : 1.0 / UIScreen.main.scale
+                tv.backgroundColor = plain ? .clear : .systemBackground
+                // UIKit's default is black, which a dark screen hides: the label colour, unless
+                // a foregroundColor sets one.
+                if tv.textColor == nil || tv.textColor == .black { tv.textColor = .label }
+                tv.textContainerInset = plain ? .zero : UIEdgeInsets(top: 8, left: 0, bottom: 8, right: 0)
+                tv.textContainer.lineFragmentPadding = plain ? 0 : 5
+                if let font = Tracker.current?.environment.font { tv.font = font.uiFont }
+                let focus = focusBinding
+                tv.onFocus = { isFocused in
+                    if focus?.wrappedValue != isFocused { focus?.wrappedValue = isFocused }
+                }
+                if let focus {
+                    if focus.wrappedValue, !tv.isFirstResponder, tv.window != nil {
+                        tv.becomeFirstResponder()
+                    } else if !focus.wrappedValue, tv.isFirstResponder {
+                        tv.resignFirstResponder()
+                    }
+                }
             }
         #endif
     }

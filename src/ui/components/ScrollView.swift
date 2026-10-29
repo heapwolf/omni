@@ -30,8 +30,8 @@ public enum ScrollTargetBehavior: Sendable, Equatable {
 /// Omni's: moves a paged scroll view from outside it (a drag along a tab
 /// bar, say) straight on the native view, a frame at a time, rendering
 /// nothing; letting go settles on a page, as a drag on the pages would.
-/// Hold one in a view's state and give it to `.pageScrubber(_:)`. iOS; on
-/// other platforms it does nothing.
+/// Hold one in a view's state and give it to `.pageScrubber(_:)`. iOS and
+/// Android; on other platforms it does nothing.
 @MainActor public final class PageScrubber {
     var onMove: ((Double) -> Void)?
     var onRelease: ((Double) -> Void)?

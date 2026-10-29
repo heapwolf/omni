@@ -39,6 +39,7 @@ extension HStack {
         omni_jni_set_stack_child(env, child, 0,
                                  AndroidExpansion.wants(child, horizontal: false) ? 1 : 0,
                                  AndroidExpansion.wants(child, horizontal: true) ? 1 : 0)
+        AndroidExpansion.settle(child, vertical: false)
         AndroidExpansion.carry(from: child, to: parent)
     }
 }

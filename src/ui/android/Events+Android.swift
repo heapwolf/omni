@@ -42,6 +42,26 @@ public class EventHandlerString {
 }
 
 
+extension OmniAndroid {
+    /// A TextView's (or an EditText's) text colour.
+    @MainActor static func setTextColor(_ view: NativeView, _ color: Color) {
+        let c = color.rgbaComponents
+        omni_jni_set_text_color(env, view, Int32(c.a * 255), Int32(c.r * 255), Int32(c.g * 255), Int32(c.b * 255))
+    }
+
+    /// An EditText as a plain field, as on iOS: no underline, no inset of its
+    /// own, and the scheme's text and hint colours until a .foregroundColor's.
+    @MainActor static func makePlainField(_ view: NativeView) {
+        omni_jni_set_background_color(env, view, 0, 0, 0, 0)
+        omni_jni_set_padding(env, view, 0, 0, 0, 0)
+        setTextColor(view, .primaryText)
+        let hint = Color.secondaryText.rgbaComponents
+        omni_jni_call_void_method_int(env, view, "setHintTextColor",
+            Int32(bitPattern: UInt32(hint.a * 255) << 24 | UInt32(hint.r * 255) << 16
+                              | UInt32(hint.g * 255) << 8 | UInt32(hint.b * 255)))
+    }
+}
+
 /// Brings an EditText in line with its binding, for TextField, SecureField and
 /// TextEditor. setText fires the TextWatcher just as typing does, so the text
 /// is set with the handler muted: an echo wrote it into whichever binding the

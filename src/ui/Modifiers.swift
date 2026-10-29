@@ -376,6 +376,13 @@ public struct ModifierView: NativeComponent {
             let env = OmniAndroid.getEnv()
 
             if let opacity { omni_jni_set_alpha(env, view, Float(opacity)) }
+            // Put back once unset, as an animation's or transition's last frame leaves it.
+            if offsetX != nil || offsetY != nil || scale != nil {
+                omni_jni_set_transform(env, view, Float(offsetX ?? 0), Float(offsetY ?? 0), Float(scale ?? 1))
+                Self.transformed.insert(view)
+            } else if Self.transformed.remove(view) != nil {
+                omni_jni_set_transform(env, view, 0, 0, 1)
+            }
             // A re-render: the children exist. On the first, insertChild tints them.
             if let foregroundColor { tintSymbols(foregroundColor, in: view) }
             if let borderWidth {
@@ -427,6 +434,9 @@ public struct ModifierView: NativeComponent {
     }
 
     #if os(Android)
+        /// Views moved or scaled by a ModifierView, to put back when it stops.
+        @MainActor static var transformed: Set<NativeView> = []
+
         /// Text takes its color itself; a symbol image takes it from here.
         @MainActor private func tintSymbols(_ color: Color, in view: NativeView) {
             let c = color.rgbaComponents
@@ -456,6 +466,10 @@ public struct ModifierView: NativeComponent {
         private func applyForegroundColor(_ color: Color, to view: UIView) {
             if let label = view as? UILabel { label.textColor = color.uiColor }
             if let imageView = view as? UIImageView { imageView.tintColor = color.uiColor }
+            // A ProgressView's spinner, as SwiftUI tints it.
+            if let spinner = view as? UIActivityIndicatorView { spinner.color = color.uiColor }
+            // A TextEditor's text.
+            if let textView = view as? UITextView { textView.textColor = color.uiColor }
             if let button = view as? UIButton {
                 button.tintColor = color.uiColor
                 button.setTitleColor(color.uiColor, for: .normal)
@@ -1318,9 +1332,7 @@ public struct ShadowModifierView: NativeComponent {
         #elseif os(Android)
             // Android has no blur-radius shadow on a plain view; elevation is the
             // platform's equivalent and drives a material drop shadow.
-            let v = OmniAndroid.makeContainer()
-            omni_jni_set_elevation(OmniAndroid.getEnv(), v, Float(radius))
-            return v
+            return OmniAndroid.makeContainer()
         #else
         #error("no implementation for this platform")
         #endif
@@ -1342,7 +1354,7 @@ public struct ShadowModifierView: NativeComponent {
             view.layer.shadowOpacity = 1
             view.layer.shadowOffset = CGSize(width: x, height: y)
         #elseif os(Android)
-            omni_jni_set_elevation(OmniAndroid.getEnv(), view, Float(radius))
+            omni_jni_set_shadow(OmniAndroid.getEnv(), view, Float(radius))
         #endif
     }
 

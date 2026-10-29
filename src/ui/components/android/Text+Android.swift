@@ -8,7 +8,12 @@ import CAndroid
 extension Text {
     public func makeNative() -> NativeView {
         let env = OmniAndroid.env
-        return OmniAndroid.createView(env, "android/widget/TextView")
+        let view = OmniAndroid.createView(env, "android/widget/TextView")
+        // The scheme's text colour until its own or a .foregroundColor's, as
+        // iOS's .label: the theme's is always dark. Set once, here, as an
+        // ancestor's .foregroundColor is set before this view's updates.
+        OmniAndroid.setTextColor(view, .primaryText)
+        return view
     }
 
     public func updateNative(_ view: NativeView) {

@@ -9,6 +9,7 @@ extension SecureField {
         let env = OmniAndroid.env
 
         let view = OmniAndroid.createView(env, "android/widget/EditText")
+        OmniAndroid.makePlainField(view)
 
         // 1. Set Placeholder (called "Hint" in Android)
         // Reusing the generic call_void_method_string from our bridge

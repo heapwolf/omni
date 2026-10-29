@@ -305,6 +305,7 @@ public struct SheetModifierView<SheetContent: View>: NativeComponent {
                 // background, so the insets below match it rather than white.
                 vc.view = OmniRootView()
                 vc.view.backgroundColor = .systemBackground
+                OmniSceneDelegate.current?.installKeyboardDismiss(on: vc.view)
                 state.host(sheetNative, in: vc.view)
                 state.sheetController = vc
 
@@ -367,7 +368,10 @@ public struct SheetModifierView<SheetContent: View>: NativeComponent {
                     Float(detent.approximateFraction), heightDp,
                     Float(options.cornerRadius ?? 10),
                     showsIndicator ? 1 : 0,
-                    options.interactiveDismissDisabled == true ? 0 : 1)
+                    options.interactiveDismissDisabled == true ? 0 : 1,
+                    // iOS's sheet colours, as the scheme has them, unless one is given.
+                    EffectBackgroundView.argb(options.background
+                        ?? Color(light: .white, dark: .rgba(r: 0.11, g: 0.11, b: 0.12))))
             #endif
 
         } else if shouldShow && state.isPresented {

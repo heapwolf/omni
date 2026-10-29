@@ -27,7 +27,7 @@ extension Frame {
 
         // 2. Map Gestures & Retain Handlers
         var retainArray: [Any] = []
-        var tapPtr, tapLocPtr, dragPtr, scrollPtr: UnsafeMutableRawPointer?
+        var tapPtr, tapLocPtr, dragPtr, dragEndPtr, scrollPtr: UnsafeMutableRawPointer?
 
         if let onTap = onTap {
             let handler = EventHandlerVoid(onTap)
@@ -49,6 +49,13 @@ extension Frame {
             dragPtr = UnsafeMutableRawPointer(Unmanaged.passUnretained(handler).toOpaque())
         }
 
+        if let onDragEnded = onDragEnded {
+            // Velocity at release, in points a second.
+            let handler = EventHandlerFloat2({ vx, vy in onDragEnded(Double(vx), Double(vy)) })
+            retainArray.append(handler)
+            dragEndPtr = UnsafeMutableRawPointer(Unmanaged.passUnretained(handler).toOpaque())
+        }
+
         if let onScroll = onScroll {
             let handler = EventHandlerFloat2({ dx, dy in onScroll(Double(dx), Double(dy)) })
             retainArray.append(handler)
@@ -56,7 +63,7 @@ extension Frame {
         }
 
         // Attach all gestures atomically via JNI
-        omni_jni_attach_frame_gestures(env, view, tapPtr, tapLocPtr, dragPtr, scrollPtr)
+        omni_jni_attach_frame_gestures(env, view, tapPtr, tapLocPtr, dragPtr, dragEndPtr, scrollPtr)
 
         // Keep handlers alive in Swift memory
         frameHandlerRegistry[view] = retainArray

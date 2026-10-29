@@ -10,6 +10,7 @@ extension TextEditor {
 
         // On Android, a TextEditor is an EditText configured for multi-line
         let view = OmniAndroid.createView(env, "android/widget/EditText")
+        OmniAndroid.makePlainField(view)
 
         // Set up multi-line properties (Gravity.TOP prevents text from centering vertically)
         omni_jni_set_multiline(env, view)

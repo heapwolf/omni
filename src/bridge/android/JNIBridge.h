@@ -40,6 +40,9 @@ void omni_jni_animate_replacement(JNIEnv *env, jobject scene_root, jobject paren
 void omni_jni_set_layout_params(JNIEnv *env, jobject view, int width, int height);
 void omni_jni_set_linear_layout_params(JNIEnv *env, jobject view, int width, int height, float weight);
 void omni_jni_set_stack_child(JNIEnv *env, jobject child, int vertical, int fillsCrossAxis, float weight);
+/// A weighted stack child measured at its content's size along the stack, the
+/// surplus shared on top, rather than from zero.
+void omni_jni_size_to_content(JNIEnv *env, jobject child, int vertical);
 int omni_jni_linear_orientation(JNIEnv *env, jobject view);
 void omni_jni_resolve_child_size(JNIEnv *env, jobject child, int fillsWidth, int fillsHeight);
 void omni_jni_set_spacer_extent(JNIEnv *env, jobject view, int vertical);
@@ -54,6 +57,12 @@ void omni_jni_set_box(JNIEnv *env, jobject view, int hasFill,
                       int strokePoints, int sa, int sr, int sg, int sb);
 void omni_jni_set_padding(JNIEnv *env, jobject view, int left, int top, int right, int bottom);
 void omni_jni_set_alpha(JNIEnv *env, jobject view, float alpha);
+/// .offset (points) and .scaleEffect, drawn without moving the layout, as on iOS.
+void omni_jni_set_transform(JNIEnv *env, jobject view, float x, float y, float scale);
+/// Image's content mode: 1 crops to fill the view, 0 fits it whole.
+void omni_jni_set_image_scale(JNIEnv *env, jobject view, int fill);
+/// .shadow: elevation (points) on the container's content, the container left flat.
+void omni_jni_set_shadow(JNIEnv *env, jobject container, float radius);
 void omni_jni_set_elevation(JNIEnv *env, jobject view, float elevation);
 void omni_jni_set_text_size(JNIEnv *env, jobject view, float size);
 void omni_jni_set_monospace(JNIEnv *env, jobject view, int isMonospaced);
@@ -74,6 +83,7 @@ void omni_jni_copy_text(JNIEnv *env, const char* text);
 char* omni_jni_pasted_text(JNIEnv *env);
 void omni_jni_send_text(JNIEnv *env, const char* method, const char* text);
 void omni_jni_dismiss_keyboard(JNIEnv *env);
+void omni_jni_set_keyboard_covers(JNIEnv *env, int covers);
 void omni_jni_set_accessibility(JNIEnv *env, jobject view, const char* label, const char* value, const char* hint, int element, int traits);
 void omni_jni_set_accessibility_hidden(JNIEnv *env, jobject view, int hidden);
 void omni_jni_set_image(JNIEnv *env, jobject view, const char* name, int isSystem);
@@ -100,7 +110,7 @@ void omni_jni_set_multiline(JNIEnv *env, jobject view);
 // Add under Event Routing if not already there
 void omni_jni_attach_on_seek_bar_change(JNIEnv *env, jobject view, void* swift_ptr);
 
-void omni_jni_attach_frame_gestures(JNIEnv *env, jobject view, void* tap_ptr, void* tap_loc_ptr, void* drag_ptr, void* scroll_ptr);
+void omni_jni_attach_frame_gestures(JNIEnv *env, jobject view, void* tap_ptr, void* tap_loc_ptr, void* drag_ptr, void* drag_end_ptr, void* scroll_ptr);
 void omni_jni_attach_swipe_gestures(JNIEnv *env, jobject view, void* left_ptr, void* right_ptr);
 
 void omni_jni_set_clip_radius(JNIEnv *env, jobject view, float radius, int isCircular);
@@ -108,12 +118,22 @@ void omni_jni_set_clip_radius(JNIEnv *env, jobject view, float radius, int isCir
 void omni_jni_attach_on_scroll_change(JNIEnv *env, jobject view, void* swift_ptr);
 jobject omni_jni_present_sheet(JNIEnv *env, jobject content, void* swift_ptr,
                                float fraction, float height_dp, float corner_radius_dp,
-                               int shows_indicator, int is_dismissable);
+                               int shows_indicator, int is_dismissable, int surface_argb);
 jobject omni_jni_present_alert(JNIEnv *env, jobject anchor, const char* title, const char* message,
                                const char* titles, const char* roles, void* swift_ptr);
 void omni_jni_dismiss_dialog(JNIEnv *env, jobject dialog);
 void omni_jni_attach_on_layout_change(JNIEnv *env, jobject view, void* swift_ptr);
 void omni_jni_scroll_to(JNIEnv *env, jobject view, int x, int y);
+/// Paged (a page at a time, told to page_ptr's EventHandlerInt) and/or not moved by a drag.
+void omni_jni_set_scroll_behavior(JNIEnv *env, jobject view, int paging, int disabled, void* page_ptr);
+/// Slides a paged scroll view to `page`; at once if it has no size yet.
+void omni_jni_show_page(JNIEnv *env, jobject view, int page);
+/// PageScrubber: move by `pages`, let go at `velocity` pages a second, or slide to `page`.
+void omni_jni_scrub_pages(JNIEnv *env, jobject view, float pages);
+void omni_jni_release_scrub(JNIEnv *env, jobject view, float velocity);
+void omni_jni_go_to_page(JNIEnv *env, jobject view, int page);
+/// The scroll view's size and its content's, in dp, to two EventHandlerFloat2s after each layout.
+void omni_jni_attach_scroll_sizes(JNIEnv *env, jobject view, void* size_ptr, void* content_ptr);
 
 void omni_jni_set_spinner_options(JNIEnv *env, jobject view, const char* options_joined);
 void omni_jni_attach_on_item_selected(JNIEnv *env, jobject view, void* swift_ptr);

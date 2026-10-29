@@ -40,6 +40,7 @@ extension VStack {
         omni_jni_set_stack_child(env, child, 1,
                                  AndroidExpansion.wants(child, horizontal: true) ? 1 : 0,
                                  AndroidExpansion.wants(child, horizontal: false) ? 1 : 0)
+        AndroidExpansion.settle(child, vertical: true)
         AndroidExpansion.carry(from: child, to: parent)
     }
 }

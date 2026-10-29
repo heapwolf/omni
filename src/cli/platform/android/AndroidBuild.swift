@@ -1230,6 +1230,13 @@ public struct AndroidBuilder {
             ? "" : " android:launchMode=\"singleTask\""
     }
 
+    /// The name under the icon: the app's (`-o`), as iOS shows, not the library it
+    /// links, which differs when the package names its library something else
+    /// (OneDosh, linking OneDoshKit).
+    private func appName(product: String) -> String {
+        target == "App" ? product : target
+    }
+
     private func manifest(product: String, hasIcon: Bool, play: PlayIntegrityVendor? = nil) -> String {
         // Referencing an absent mipmap makes aapt2 link fail.
         let iconAttr = hasIcon ? "\n                         android:icon=\"@mipmap/ic_launcher\"" : ""
@@ -1249,7 +1256,7 @@ public struct AndroidBuilder {
             <!-- Approval keys. -->
             <uses-permission android:name="android.permission.USE_BIOMETRIC" />
 
-            <application android:label="\(product)"
+            <application android:label="\(appName(product: product))"
                          android:theme="@android:style/Theme.DeviceDefault.Light.NoActionBar"
                          android:extractNativeLibs="true"
                          android:debuggable="true"
@@ -1328,6 +1335,10 @@ public struct AndroidBuilder {
                 if (action == android.view.MotionEvent.ACTION_DOWN
                         || action == android.view.MotionEvent.ACTION_POINTER_DOWN) {
                     com.omni.OmniEventBridge.dispatchActivity();
+                }
+                // A third finger down logs the view tree (debug builds; see dumpTree).
+                if (action == android.view.MotionEvent.ACTION_POINTER_DOWN && event.getPointerCount() == 3) {
+                    com.omni.OmniEventBridge.dumpTree(getWindow().getDecorView());
                 }
                 return super.dispatchTouchEvent(event);
             }

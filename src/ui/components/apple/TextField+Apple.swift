@@ -100,6 +100,12 @@ extension TextField {
     @MainActor private func applyFocus(_ view: NativeView) {
         guard let focusBinding else { return }
         let wantsFocus = focusBinding.wrappedValue
+        // Acted on when it changes, not on every render: a render that only
+        // re-reads the binding (a search applied, a list reloaded) took focus
+        // from a field the person had put it in, and the keyboard went.
+        let last = objc_getAssociatedObject(view, &FocusMemory.key) as? Bool
+        objc_setAssociatedObject(view, &FocusMemory.key, wantsFocus, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        guard last != wantsFocus else { return }
 
         #if os(iOS)
         guard let tf = view as? UITextField else { return }
@@ -110,7 +116,9 @@ extension TextField {
         }
         #elseif os(macOS)
         guard let tf = view as? NSTextField else { return }
-        let isFocused = tf.window?.firstResponder === tf.currentEditor()
+        // Being edited: its window's first responder is its own field editor
+        // (a field that isn't edited has none; nil === nil isn't focus).
+        let isFocused = tf.currentEditor().map { tf.window?.firstResponder === $0 } ?? false
         if wantsFocus, !isFocused {
             tf.window?.makeFirstResponder(tf)
         } else if !wantsFocus, isFocused {
@@ -168,5 +176,9 @@ extension TextField {
         }
     }
     #endif
+}
+/// The focus a field's binding last asked for, kept on its native view.
+@MainActor enum FocusMemory {
+    static var key: UInt8 = 0
 }
 #endif

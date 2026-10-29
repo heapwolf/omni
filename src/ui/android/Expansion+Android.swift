@@ -11,10 +11,27 @@ enum AndroidExpansion {
     private static var pinnedHeight: Set<UnsafeMutableRawPointer> = []
     private static var spacers: Set<UnsafeMutableRawPointer> = []
 
+    /// Claimed by the view itself (a Spacer, a ScrollView), not carried up from inside.
+    private static var ownHorizontal: Set<UnsafeMutableRawPointer> = []
+    private static var ownVertical: Set<UnsafeMutableRawPointer> = []
+
     /// `view` wants the surplus along these axes.
     static func claim(_ view: NativeView, horizontal wantsWidth: Bool, vertical wantsHeight: Bool) {
-        if wantsWidth { horizontal.insert(view) } else { horizontal.remove(view) }
-        if wantsHeight { vertical.insert(view) } else { vertical.remove(view) }
+        if wantsWidth { horizontal.insert(view); ownHorizontal.insert(view) } else { horizontal.remove(view); ownHorizontal.remove(view) }
+        if wantsHeight { vertical.insert(view); ownVertical.insert(view) } else { vertical.remove(view); ownVertical.remove(view) }
+    }
+
+    /// After omni_jni_set_stack_child: a child that wants the surplus only because
+    /// something inside it does (a stack holding a Spacer) keeps its content's size
+    /// and takes its share on top, as SwiftUI sizes it. From zero, it got an equal
+    /// share whatever its content: a keypad above a Spacer lost its last rows, a
+    /// column of amounts was cut short. Spacers, scroll views and the like, which
+    /// claim it themselves, still take only the surplus.
+    static func settle(_ child: NativeView, vertical isVertical: Bool) {
+        let wantsAlong = (isVertical ? vertical : horizontal).contains(child)
+        let ownsIt = (isVertical ? ownVertical : ownHorizontal).contains(child) || fillers.contains(child)
+        guard wantsAlong, !ownsIt else { return }
+        omni_jni_size_to_content(OmniAndroid.env, child, isVertical ? 1 : 0)
     }
 
     static func wants(_ view: NativeView, horizontal axis: Bool) -> Bool {
@@ -76,8 +93,10 @@ enum AndroidExpansion {
         switch omni_jni_linear_orientation(env, parent) {
         case 1:
             omni_jni_set_stack_child(env, view, 1, wantsWidth ? 1 : 0, wantsHeight ? 1 : 0)
+            settle(view, vertical: true)
         case 0:
             omni_jni_set_stack_child(env, view, 0, wantsHeight ? 1 : 0, wantsWidth ? 1 : 0)
+            settle(view, vertical: false)
         default:
             omni_jni_resolve_child_size(env, view, wantsWidth ? 1 : 0, wantsHeight ? 1 : 0)
         }
@@ -99,6 +118,8 @@ enum AndroidExpansion {
         fillers.remove(view)
         horizontal.remove(view)
         vertical.remove(view)
+        ownHorizontal.remove(view)
+        ownVertical.remove(view)
         pinnedWidth.remove(view)
         pinnedHeight.remove(view)
         spacers.remove(view)

@@ -19,7 +19,9 @@ extension EffectBackgroundView {
             switch glass.variant {
             case .identity: fill = .rgba(r: 0, g: 0, b: 0, a: 0)
             case .clear: fill = isDark ? .rgba(r: 1, g: 1, b: 1, a: 0.06) : .rgba(r: 1, g: 1, b: 1, a: 0.30)
-            case .regular: fill = isDark ? .rgba(r: 1, g: 1, b: 1, a: 0.12) : .rgba(r: 1, g: 1, b: 1, a: 0.65)
+            // Nearly opaque: with no blur, content showed through it legibly (a list
+            // under the tab bar read through the tabs).
+            case .regular: fill = isDark ? .rgba(r: 0.17, g: 0.17, b: 0.19, a: 0.94) : .rgba(r: 0.98, g: 0.98, b: 0.99, a: 0.94)
             }
             if let tint = glass.tint, glass.variant != .identity {
                 let t = tint.rgbaComponents
@@ -39,6 +41,23 @@ extension EffectBackgroundView {
         }
         // A tint given is the background it sits on: no blur here to tint.
         if let tint { fill = tint }
+        // Fading toward an edge: the fill, clear at that edge, and no hairline, which
+        // drew a box around what should recede (the strip behind a tab bar).
+        if let fade {
+            let clear = fill.opacity(0)
+            let (sx, sy, ex, ey): (Float, Float, Float, Float)
+            switch fade {
+            case .top: (sx, sy, ex, ey) = (0, 1, 0, 0)
+            case .bottom: (sx, sy, ex, ey) = (0, 0, 0, 1)
+            case .leading: (sx, sy, ex, ey) = (1, 0, 0, 0)
+            case .trailing: (sx, sy, ex, ey) = (0, 0, 1, 0)
+            }
+            let colors = [Self.argb(fill), Self.argb(clear)]
+            colors.withUnsafeBufferPointer { buffer in
+                omni_jni_set_linear_gradient(OmniAndroid.env, view, buffer.baseAddress, 2, sx, sy, ex, ey)
+            }
+            return
+        }
         let stroke: Color = isDark ? .rgba(r: 1, g: 1, b: 1, a: 0.14) : .rgba(r: 0, g: 0, b: 0, a: 0.08)
         let isIdentity: Bool
         if case .glass(let glass) = kind { isIdentity = glass.variant == .identity } else { isIdentity = false }

@@ -93,6 +93,54 @@ import CAndroid
         omni_jni_dismiss_keyboard(OmniAndroid.getEnv())
         #endif
     }
+
+    /// Whether the keyboard covers the app's root, instead of the root moving
+    /// up out of its way (the default, so a form's field and button stay in
+    /// view). Sheets are unaffected: they always move. Set by views marked
+    /// `keyboardCoversContent(_:)`: true while any of them asks for it.
+    public static var coversContent: Bool { !covering.isEmpty }
+
+    /// The views asking for it, by the id each keeps.
+    private static var covering: Set<UUID> = []
+
+    /// iOS's root, told when it changes (Engine's OmniSceneDelegate).
+    static var onCoversContentChange: ((Bool) -> Void)?
+
+    static func cover(_ on: Bool, for view: UUID) {
+        let was = coversContent
+        if on { covering.insert(view) } else { covering.remove(view) }
+        guard coversContent != was else { return }
+        #if os(iOS)
+        onCoversContentChange?(coversContent)
+        #elseif os(Android)
+        omni_jni_set_keyboard_covers(OmniAndroid.getEnv(), coversContent ? 1 : 0)
+        #endif
+    }
+}
+
+/// See `View.keyboardCoversContent(_:)`.
+public struct KeyboardCoverView<Content: View>: View {
+    let content: Content
+    let covers: Bool
+    @State private var id = UUID()
+
+    public var body: some View {
+        let id = self.id, covers = self.covers
+        return content
+            .onAppear { Keyboard.cover(covers, for: id) }
+            .onChange(of: covers) { Keyboard.cover($0, for: id) }
+            .onDisappear { Keyboard.cover(false, for: id) }
+    }
+}
+
+public extension View {
+    /// While `covers` and this view is on screen, the keyboard covers the
+    /// app instead of the app moving up out of its way: for a screen whose
+    /// bottom is a tab bar, which shouldn't ride up on the keyboard, and whose
+    /// fields are near the top. iOS and Android; elsewhere nothing moves.
+    func keyboardCoversContent(_ covers: Bool = true) -> some View {
+        KeyboardCoverView(content: self, covers: covers)
+    }
 }
 
 #if os(macOS)
@@ -120,6 +168,19 @@ import CAndroid
 @_cdecl("omni_swift_lifecycle")
 public func omni_swift_lifecycle(_ foreground: Int32) {
     MainActor.assumeIsolated { AppLifecycle.enter(foreground != 0 ? .foreground : .background) }
+}
+
+/// Called as the window's insets change: the bars' heights, in points. A
+/// screen drawing under the status bar (.ignoresSafeArea) reads it to keep
+/// clear of it, as on iOS.
+@_cdecl("omni_swift_safe_area")
+public func omni_swift_safe_area(_ top: Float, _ bottom: Float) {
+    MainActor.assumeIsolated {
+        let insets = SafeArea(top: Double(top), bottom: Double(bottom))
+        guard insets.top != Engine.safeArea.top || insets.bottom != Engine.safeArea.bottom else { return }
+        Engine.safeArea = insets
+        if let root = Engine.root { Engine.render(root) }
+    }
 }
 
 /// Called from MainActivity's dispatchTouchEvent, for each finger going down.

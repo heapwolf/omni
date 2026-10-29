@@ -129,12 +129,15 @@ public enum Color: Sendable, Equatable {
             return (1.0, 0.8, 0.0, 1.0)
         case .purple:
             return (0.69, 0.32, 0.87, 1.0)
-        case .windowBackground, .controlBackground:
-            return (0.95, 0.95, 0.95, 1.0)
+        // The scheme on screen's, as the system's semantic colours are.
+        case .windowBackground:
+            return Appearance.current == .dark ? (0.0, 0.0, 0.0, 1.0) : (0.95, 0.95, 0.95, 1.0)
+        case .controlBackground:
+            return Appearance.current == .dark ? (0.11, 0.11, 0.12, 1.0) : (0.95, 0.95, 0.95, 1.0)
         case .primaryText:
-            return (0.0, 0.0, 0.0, 1.0)
+            return Appearance.current == .dark ? (1.0, 1.0, 1.0, 1.0) : (0.0, 0.0, 0.0, 1.0)
         case .secondaryText:
-            return (0.5, 0.5, 0.5, 1.0)
+            return Appearance.current == .dark ? (0.92, 0.92, 0.96, 0.6) : (0.24, 0.24, 0.26, 0.6)
         }
     }
 }

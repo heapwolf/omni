@@ -150,6 +150,39 @@ JNIEnv* omni_get_env(void) {
     return env;
 }
 
+/// One of the app's classes (com/omni/...), from any thread. FindClass on a
+/// thread attached from native code sees only the system's classes, so a
+/// Keystore call from a Swift task found no OmniDeviceKey; the activity's
+/// class loader sees the app's. A local ref, as FindClass gives.
+static jclass omni_jni_app_class(JNIEnv *env, const char *name) {
+    jclass clazz = (*env)->FindClass(env, name);
+    if (clazz) return clazz;
+    omni_jni_clear_pending(env);
+    if (!global_activity) return NULL;
+
+    char dotted[256];
+    size_t i = 0;
+    for (; name[i] && i < sizeof(dotted) - 1; i++) dotted[i] = name[i] == '/' ? '.' : name[i];
+    dotted[i] = 0;
+
+    jclass activityClass = (*env)->GetObjectClass(env, global_activity);
+    jmethodID getLoader = (*env)->GetMethodID(env, activityClass, "getClassLoader", "()Ljava/lang/ClassLoader;");
+    jobject loader = getLoader ? (*env)->CallObjectMethod(env, global_activity, getLoader) : NULL;
+    omni_jni_clear_pending(env);
+    jclass loaderClass = loader ? (*env)->GetObjectClass(env, loader) : NULL;
+    jmethodID loadClass = loaderClass
+        ? (*env)->GetMethodID(env, loaderClass, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;") : NULL;
+    jstring jName = (*env)->NewStringUTF(env, dotted);
+    clazz = loadClass ? (jclass)(*env)->CallObjectMethod(env, loader, loadClass, jName) : NULL;
+    omni_jni_clear_pending(env);
+
+    (*env)->DeleteLocalRef(env, jName);
+    if (loaderClass) (*env)->DeleteLocalRef(env, loaderClass);
+    if (loader) (*env)->DeleteLocalRef(env, loader);
+    (*env)->DeleteLocalRef(env, activityClass);
+    return clazz;
+}
+
 // Android Layout Constants
 const int MATCH_PARENT = -1;
 const int WRAP_CONTENT = -2;
@@ -263,7 +296,7 @@ void omni_jni_animate_replacement(JNIEnv *env, jobject scene_root, jobject paren
                                   jobject leaving, int duration_ms, int curve,
                                   float in_x, float in_y, int in_fade,
                                   float out_x, float out_y, int out_fade) {
-    jclass bridgeClass = (*env)->FindClass(env, "com/omni/OmniEventBridge");
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     if (!bridgeClass) {
         omni_jni_clear_pending(env);
         return;
@@ -420,6 +453,36 @@ void omni_jni_set_padding(JNIEnv *env, jobject view, int left, int top, int righ
                   omni_jni_px(env, right), omni_jni_px(env, bottom));
 }
 
+void omni_jni_set_shadow(JNIEnv *env, jobject container, float radius) {
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
+    if (!bridgeClass) return;
+    jmethodID method = (*env)->GetStaticMethodID(env, bridgeClass, "setShadow", "(Landroid/view/View;F)V");
+    if (method) (*env)->CallStaticVoidMethod(env, bridgeClass, method, container, omni_jni_pxf(env, radius));
+    omni_jni_clear_pending(env);
+    (*env)->DeleteLocalRef(env, bridgeClass);
+}
+
+void omni_jni_set_image_scale(JNIEnv *env, jobject view, int fill) {
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
+    if (!bridgeClass) return;
+    jmethodID method = (*env)->GetStaticMethodID(env, bridgeClass, "setImageScale", "(Landroid/widget/ImageView;Z)V");
+    if (method) (*env)->CallStaticVoidMethod(env, bridgeClass, method, view, (jboolean)(fill != 0));
+    omni_jni_clear_pending(env);
+    (*env)->DeleteLocalRef(env, bridgeClass);
+}
+
+void omni_jni_set_transform(JNIEnv *env, jobject view, float x, float y, float scale) {
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
+    if (!bridgeClass) return;
+    jmethodID method = (*env)->GetStaticMethodID(env, bridgeClass, "setTransform", "(Landroid/view/View;FFF)V");
+    if (method) {
+        (*env)->CallStaticVoidMethod(env, bridgeClass, method, view,
+                                     omni_jni_pxf(env, x), omni_jni_pxf(env, y), scale);
+    }
+    omni_jni_clear_pending(env);
+    (*env)->DeleteLocalRef(env, bridgeClass);
+}
+
 void omni_jni_set_alpha(JNIEnv *env, jobject view, float alpha) {
     omni_jni_call(env, view, "setAlpha", "(F)V", alpha);
 }
@@ -442,7 +505,7 @@ void omni_jni_set_box(JNIEnv *env, jobject view, int hasFill,
     int strokeWidth = (int)(strokePoints * omni_jni_density(env) + 0.5f);
     if (strokePoints > 0 && strokeWidth < 1) strokeWidth = 1;
 
-    jclass bridgeClass = (*env)->FindClass(env, "com/omni/OmniEventBridge");
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     if (!bridgeClass) { omni_jni_clear_pending(env); return; }
     jmethodID method = (*env)->GetStaticMethodID(env, bridgeClass, "setBox",
         "(Landroid/view/View;ZIII)V");
@@ -482,7 +545,7 @@ void omni_jni_set_monospace(JNIEnv *env, jobject view, int isMonospaced) {
 }
 
 int omni_jni_register_font(JNIEnv *env, const char* family, const char* path) {
-    jclass bridgeClass = (*env)->FindClass(env, "com/omni/OmniEventBridge");
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     if (!bridgeClass) { omni_jni_clear_pending(env); return 0; }
     jmethodID method = (*env)->GetStaticMethodID(env, bridgeClass, "registerFont",
         "(Ljava/lang/String;Ljava/lang/String;)Z");
@@ -503,7 +566,7 @@ int omni_jni_register_font(JNIEnv *env, const char* family, const char* path) {
 // family may be NULL for the platform's own UI font.
 void omni_jni_set_typeface(JNIEnv *env, jobject view, const char* family,
                            int weight, int italic, int monospaced) {
-    jclass bridgeClass = (*env)->FindClass(env, "com/omni/OmniEventBridge");
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     if (!bridgeClass) { omni_jni_clear_pending(env); return; }
     jmethodID method = (*env)->GetStaticMethodID(env, bridgeClass, "setTypeface",
         "(Landroid/widget/TextView;Ljava/lang/String;IZZ)V");
@@ -539,7 +602,7 @@ void omni_jni_set_text_spacing(JNIEnv *env, jobject view, float linePoints, floa
 }
 
 void omni_jni_set_secure_text(JNIEnv *env, jobject view) {
-    jclass bridgeClass = (*env)->FindClass(env, "com/omni/OmniEventBridge");
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     jmethodID method = (*env)->GetStaticMethodID(env, bridgeClass, "setSecureText", "(Landroid/widget/EditText;)V");
     (*env)->CallStaticVoidMethod(env, bridgeClass, method, view);
     (*env)->DeleteLocalRef(env, bridgeClass);
@@ -597,7 +660,7 @@ void omni_jni_set_child_gravity(JNIEnv *env, jobject child, int gravity) {
 // Arms an animation over the subtree at `root`. curve is AnimationCurve's
 // ordinal; see OmniEventBridge.beginTransition.
 void omni_jni_begin_transition(JNIEnv *env, jobject root, long durationMs, int curve) {
-    jclass bridgeClass = (*env)->FindClass(env, "com/omni/OmniEventBridge");
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     if (!bridgeClass) { omni_jni_clear_pending(env); return; }
     jmethodID method = (*env)->GetStaticMethodID(env, bridgeClass, "beginTransition",
         "(Landroid/view/ViewGroup;JI)V");
@@ -611,7 +674,7 @@ void omni_jni_begin_transition(JNIEnv *env, jobject root, long durationMs, int c
 
 // The push/pop slide; counterpart of ZStack+Apple's CATransition.
 void omni_jni_begin_navigation_transition(JNIEnv *env, jobject root, int isPush, long durationMs) {
-    jclass bridgeClass = (*env)->FindClass(env, "com/omni/OmniEventBridge");
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     if (!bridgeClass) { omni_jni_clear_pending(env); return; }
     jmethodID method = (*env)->GetStaticMethodID(env, bridgeClass, "beginNavigationTransition",
         "(Landroid/view/ViewGroup;ZJ)V");
@@ -626,7 +689,7 @@ void omni_jni_begin_navigation_transition(JNIEnv *env, jobject root, int isPush,
 
 // --- Event Routing ---
 void omni_jni_set_on_click(JNIEnv *env, jobject view, void* swift_ptr) {
-    jclass bridgeClass = (*env)->FindClass(env, "com/omni/OmniEventBridge");
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     jmethodID attachMethod = (*env)->GetStaticMethodID(env, bridgeClass, "attachOnClick", "(Landroid/view/View;J)V");
 
     (*env)->CallStaticVoidMethod(env, bridgeClass, attachMethod, view, (jlong)swift_ptr);
@@ -637,7 +700,7 @@ void omni_jni_set_on_click(JNIEnv *env, jobject view, void* swift_ptr) {
 // A press: 1 down or back inside, 0 out or cancelled, 2 released inside, each
 // through dispatchInt. See PressGesture+Android.swift.
 void omni_jni_set_on_press(JNIEnv *env, jobject view, void* swift_ptr) {
-    jclass bridgeClass = (*env)->FindClass(env, "com/omni/OmniEventBridge");
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     if (!bridgeClass) { omni_jni_clear_pending(env); return; }
     jmethodID attachMethod = (*env)->GetStaticMethodID(env, bridgeClass, "attachOnPress", "(Landroid/view/View;J)V");
     if (attachMethod) {
@@ -650,7 +713,7 @@ void omni_jni_set_on_press(JNIEnv *env, jobject view, void* swift_ptr) {
 
 // A haptic, by OmniEventBridge.haptic's numbering; see SensoryFeedback.swift.
 void omni_jni_haptic(JNIEnv *env, int kind) {
-    jclass bridgeClass = (*env)->FindClass(env, "com/omni/OmniEventBridge");
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     if (!bridgeClass) { omni_jni_clear_pending(env); return; }
     jmethodID method = (*env)->GetStaticMethodID(env, bridgeClass, "haptic", "(I)V");
     if (method) {
@@ -663,7 +726,7 @@ void omni_jni_haptic(JNIEnv *env, int kind) {
 
 // "Remove animations": see EnvironmentValues.accessibilityReduceMotion.
 int omni_jni_reduce_motion(JNIEnv *env) {
-    jclass bridgeClass = (*env)->FindClass(env, "com/omni/OmniEventBridge");
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     if (!bridgeClass) { omni_jni_clear_pending(env); return 0; }
     jmethodID method = (*env)->GetStaticMethodID(env, bridgeClass, "reduceMotion", "()Z");
     int reduce = 0;
@@ -678,7 +741,7 @@ int omni_jni_reduce_motion(JNIEnv *env) {
 
 // See OmniEventBridge.setGlass. Colours are packed ARGB; the radius is in points.
 void omni_jni_set_glass(JNIEnv *env, jobject view, int fill, int stroke, float radius, int circular) {
-    jclass bridgeClass = (*env)->FindClass(env, "com/omni/OmniEventBridge");
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     if (!bridgeClass) { omni_jni_clear_pending(env); return; }
     jmethodID method = (*env)->GetStaticMethodID(env, bridgeClass, "setGlass", "(Landroid/view/View;IIFZ)V");
     if (method) {
@@ -703,7 +766,7 @@ void omni_jni_set_minimum_size(JNIEnv *env, jobject view, float width, float hei
 // Clipboard.copy; see OmniEventBridge.copyText. The text crosses as UTF-8
 // bytes: NewStringUTF takes Modified UTF-8, and an emoji's four bytes are not.
 void omni_jni_copy_text(JNIEnv *env, const char* text) {
-    jclass bridgeClass = (*env)->FindClass(env, "com/omni/OmniEventBridge");
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     if (!bridgeClass) { omni_jni_clear_pending(env); return; }
     jmethodID method = (*env)->GetStaticMethodID(env, bridgeClass, "copyText", "([B)V");
     if (method) {
@@ -723,7 +786,7 @@ void omni_jni_copy_text(JNIEnv *env, const char* text) {
 // OmniEventBridge.<method>(byte[]): text handed to Java as UTF-8 bytes, for
 // the same reason as copyText. openURL and share.
 void omni_jni_send_text(JNIEnv *env, const char* method, const char* text) {
-    jclass bridgeClass = (*env)->FindClass(env, "com/omni/OmniEventBridge");
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     if (!bridgeClass) { omni_jni_clear_pending(env); return; }
     jmethodID m = (*env)->GetStaticMethodID(env, bridgeClass, method, "([B)V");
     if (m) {
@@ -742,7 +805,7 @@ void omni_jni_send_text(JNIEnv *env, const char* method, const char* text) {
 
 // Clipboard.string: a malloc'd, NUL-terminated UTF-8 copy the caller frees, or NULL.
 char* omni_jni_pasted_text(JNIEnv *env) {
-    jclass bridgeClass = (*env)->FindClass(env, "com/omni/OmniEventBridge");
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     if (!bridgeClass) { omni_jni_clear_pending(env); return NULL; }
     jmethodID method = (*env)->GetStaticMethodID(env, bridgeClass, "pastedText", "()[B");
     char* result = NULL;
@@ -768,7 +831,7 @@ char* omni_jni_pasted_text(JNIEnv *env) {
 // left as an earlier modifier set them.
 void omni_jni_set_accessibility(JNIEnv *env, jobject view, const char* label, const char* value,
                                 const char* hint, int element, int traits) {
-    jclass bridgeClass = (*env)->FindClass(env, "com/omni/OmniEventBridge");
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     if (!bridgeClass) { omni_jni_clear_pending(env); return; }
     jmethodID method = (*env)->GetStaticMethodID(env, bridgeClass, "setAccessibility",
         "(Landroid/view/View;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZI)V");
@@ -847,24 +910,24 @@ JNIEXPORT void JNICALL Java_com_omni_OmniEventBridge_dispatchFloat2(JNIEnv *env,
 }
 
 void omni_jni_attach_on_seek_bar_change(JNIEnv *env, jobject view, void* swift_ptr) {
-    jclass clazz = (*env)->FindClass(env, "com/omni/OmniEventBridge");
+    jclass clazz = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     jmethodID method = (*env)->GetStaticMethodID(env, clazz, "attachOnSeekBarChange", "(Landroid/widget/SeekBar;J)V");
     (*env)->CallStaticVoidMethod(env, clazz, method, view, (jlong)swift_ptr);
 }
 
-void omni_jni_attach_frame_gestures(JNIEnv *env, jobject view, void* tap_ptr, void* tap_loc_ptr, void* drag_ptr, void* scroll_ptr) {
-    jclass bridgeClass = (*env)->FindClass(env, "com/omni/OmniEventBridge");
+void omni_jni_attach_frame_gestures(JNIEnv *env, jobject view, void* tap_ptr, void* tap_loc_ptr, void* drag_ptr, void* drag_end_ptr, void* scroll_ptr) {
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
 
-    // Takes one View and four longs (pointers).
-    jmethodID attachMethod = (*env)->GetStaticMethodID(env, bridgeClass, "attachFrameGestures", "(Landroid/view/View;JJJJ)V");
+    // Takes one View and five longs (pointers).
+    jmethodID attachMethod = (*env)->GetStaticMethodID(env, bridgeClass, "attachFrameGestures", "(Landroid/view/View;JJJJJ)V");
 
-    (*env)->CallStaticVoidMethod(env, bridgeClass, attachMethod, view, (jlong)tap_ptr, (jlong)tap_loc_ptr, (jlong)drag_ptr, (jlong)scroll_ptr);
+    (*env)->CallStaticVoidMethod(env, bridgeClass, attachMethod, view, (jlong)tap_ptr, (jlong)tap_loc_ptr, (jlong)drag_ptr, (jlong)drag_end_ptr, (jlong)scroll_ptr);
 
     (*env)->DeleteLocalRef(env, bridgeClass);
 }
 
 void omni_jni_set_image(JNIEnv *env, jobject view, const char* name, int isSystem) {
-    jclass bridgeClass = (*env)->FindClass(env, "com/omni/OmniEventBridge");
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     jmethodID method = (*env)->GetStaticMethodID(env, bridgeClass, "setImage", "(Landroid/widget/ImageView;Ljava/lang/String;Z)V");
 
     jstring jName = (*env)->NewStringUTF(env, name);
@@ -877,7 +940,7 @@ void omni_jni_set_image(JNIEnv *env, jobject view, const char* name, int isSyste
 // A shape's outline; see OmniEventBridge.setStroke.
 void omni_jni_set_stroke(JNIEnv *env, jobject view, int kind, float radius, float width,
                          int inset, int a, int r, int g, int b) {
-    jclass bridgeClass = (*env)->FindClass(env, "com/omni/OmniEventBridge");
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     if (!bridgeClass) {
         omni_jni_clear_pending(env);
         return;
@@ -895,7 +958,7 @@ void omni_jni_set_stroke(JNIEnv *env, jobject view, int kind, float radius, floa
 
 // .textContentType; see OmniEventBridge.setAutofillHint. "" clears it.
 void omni_jni_set_autofill_hint(JNIEnv *env, jobject view, const char* hint) {
-    jclass bridgeClass = (*env)->FindClass(env, "com/omni/OmniEventBridge");
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     if (!bridgeClass) {
         omni_jni_clear_pending(env);
         return;
@@ -914,7 +977,7 @@ void omni_jni_set_autofill_hint(JNIEnv *env, jobject view, const char* hint) {
 // ARGB colours, evenly spaced; see OmniEventBridge.setLinearGradient.
 void omni_jni_set_linear_gradient(JNIEnv *env, jobject view, const int32_t* colors, int count,
                                   float start_x, float start_y, float end_x, float end_y) {
-    jclass bridgeClass = (*env)->FindClass(env, "com/omni/OmniEventBridge");
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     if (!bridgeClass) {
         omni_jni_clear_pending(env);
         return;
@@ -934,7 +997,7 @@ void omni_jni_set_linear_gradient(JNIEnv *env, jobject view, const int32_t* colo
 
 // .foregroundColor for the drawn symbols in a subtree; see OmniEventBridge.tintSymbols.
 void omni_jni_tint_symbols(JNIEnv *env, jobject view, int a, int r, int g, int b) {
-    jclass bridgeClass = (*env)->FindClass(env, "com/omni/OmniEventBridge");
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     if (!bridgeClass) {
         omni_jni_clear_pending(env);
         return;
@@ -950,7 +1013,7 @@ void omni_jni_tint_symbols(JNIEnv *env, jobject view, int a, int r, int g, int b
 }
 
 void omni_jni_set_image_bytes(JNIEnv *env, jobject view, const uint8_t* data, int length) {
-    jclass bridgeClass = (*env)->FindClass(env, "com/omni/OmniEventBridge");
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     jmethodID method = (*env)->GetStaticMethodID(env, bridgeClass, "setImageBytes",
         "(Landroid/widget/ImageView;[B)V");
     if (method) {
@@ -1064,6 +1127,18 @@ void omni_jni_set_stack_child(JNIEnv *env, jobject child, int vertical,
     (*env)->DeleteLocalRef(env, params);
 }
 
+void omni_jni_size_to_content(JNIEnv *env, jobject child, int vertical) {
+    jobject params; jclass paramsClass; jfieldID width, height; jmethodID setter;
+    if (!omni_jni_layout_fields(env, child, &params, &paramsClass, &width, &height, &setter)) return;
+    jfieldID along = vertical ? height : width;
+    if ((*env)->GetIntField(env, params, along) == 0) {
+        (*env)->SetIntField(env, params, along, WRAP_CONTENT);
+        (*env)->CallVoidMethod(env, child, setter, params);
+    }
+    (*env)->DeleteLocalRef(env, paramsClass);
+    (*env)->DeleteLocalRef(env, params);
+}
+
 void omni_jni_set_spacer_extent(JNIEnv *env, jobject view, int vertical) {
     jobject params; jclass paramsClass; jfieldID width, height; jmethodID setter;
     if (!omni_jni_layout_fields(env, view, &params, &paramsClass, &width, &height, &setter)) return;
@@ -1084,7 +1159,7 @@ void omni_jni_set_spacer_extent(JNIEnv *env, jobject view, int vertical) {
 
 // The window's content, edge to edge; see OmniEventBridge.installRoot.
 void omni_jni_install_root(JNIEnv *env, jobject activity, jobject root) {
-    jclass bridgeClass = (*env)->FindClass(env, "com/omni/OmniEventBridge");
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     if (!bridgeClass) {
         omni_jni_clear_pending(env);
         return;
@@ -1100,7 +1175,7 @@ void omni_jni_install_root(JNIEnv *env, jobject activity, jobject root) {
 
 // Asks the Java side to log the laid-out tree. See OmniEventBridge.dumpTree.
 void omni_jni_dump_view_tree(JNIEnv *env, jobject root) {
-    jclass bridgeClass = (*env)->FindClass(env, "com/omni/OmniEventBridge");
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     if (!bridgeClass) {
         omni_jni_clear_pending(env);
         return;
@@ -1115,7 +1190,7 @@ void omni_jni_dump_view_tree(JNIEnv *env, jobject root) {
 }
 
 void omni_jni_set_linear_layout_spacing(JNIEnv *env, jobject view, int spacing) {
-    jclass bridgeClass = (*env)->FindClass(env, "com/omni/OmniEventBridge");
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     jmethodID method = (*env)->GetStaticMethodID(env, bridgeClass, "setLinearLayoutSpacing", "(Landroid/widget/LinearLayout;I)V");
     (*env)->CallStaticVoidMethod(env, bridgeClass, method, view, omni_jni_px(env, spacing));
     (*env)->DeleteLocalRef(env, bridgeClass);
@@ -1127,7 +1202,7 @@ void omni_jni_set_checked(JNIEnv *env, jobject view, int isChecked) {
 }
 
 void omni_jni_attach_on_checked(JNIEnv *env, jobject view, void* swift_ptr) {
-    jclass bridgeClass = (*env)->FindClass(env, "com/omni/OmniEventBridge");
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     jmethodID attachMethod = (*env)->GetStaticMethodID(env, bridgeClass, "attachOnChecked", "(Landroid/widget/CompoundButton;J)V");
     (*env)->CallStaticVoidMethod(env, bridgeClass, attachMethod, view, (jlong)swift_ptr);
     (*env)->DeleteLocalRef(env, bridgeClass);
@@ -1135,7 +1210,7 @@ void omni_jni_attach_on_checked(JNIEnv *env, jobject view, void* swift_ptr) {
 
 // A field leaving the screen; see OmniEventBridge.detachTextField.
 void omni_jni_detach_text_field(JNIEnv *env, jobject view) {
-    jclass bridgeClass = (*env)->FindClass(env, "com/omni/OmniEventBridge");
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     if (!bridgeClass) {
         omni_jni_clear_pending(env);
         return;
@@ -1147,7 +1222,7 @@ void omni_jni_detach_text_field(JNIEnv *env, jobject view) {
 }
 
 void omni_jni_attach_text_watcher(JNIEnv *env, jobject view, void* swift_ptr) {
-    jclass bridgeClass = (*env)->FindClass(env, "com/omni/OmniEventBridge");
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     jmethodID attachMethod = (*env)->GetStaticMethodID(env, bridgeClass, "attachTextWatcher", "(Landroid/widget/EditText;J)V");
     (*env)->CallStaticVoidMethod(env, bridgeClass, attachMethod, view, (jlong)swift_ptr);
     (*env)->DeleteLocalRef(env, bridgeClass);
@@ -1176,21 +1251,21 @@ char* omni_jni_get_text(JNIEnv *env, jobject view) {
 }
 
 void omni_jni_set_multiline(JNIEnv *env, jobject view) {
-    jclass bridgeClass = (*env)->FindClass(env, "com/omni/OmniEventBridge");
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     jmethodID method = (*env)->GetStaticMethodID(env, bridgeClass, "setMultiline", "(Landroid/widget/EditText;)V");
     (*env)->CallStaticVoidMethod(env, bridgeClass, method, view);
     (*env)->DeleteLocalRef(env, bridgeClass);
 }
 
 void omni_jni_attach_swipe_gestures(JNIEnv *env, jobject view, void* left_ptr, void* right_ptr) {
-    jclass bridgeClass = (*env)->FindClass(env, "com/omni/OmniEventBridge");
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     jmethodID attachMethod = (*env)->GetStaticMethodID(env, bridgeClass, "attachSwipeGestures", "(Landroid/view/View;JJ)V");
     (*env)->CallStaticVoidMethod(env, bridgeClass, attachMethod, view, (jlong)left_ptr, (jlong)right_ptr);
     (*env)->DeleteLocalRef(env, bridgeClass);
 }
 
 void omni_jni_set_clip_radius(JNIEnv *env, jobject view, float radius, int isCircular) {
-    jclass bridgeClass = (*env)->FindClass(env, "com/omni/OmniEventBridge");
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     jmethodID method = (*env)->GetStaticMethodID(env, bridgeClass, "setClipRadius", "(Landroid/view/View;FZ)V");
     (*env)->CallStaticVoidMethod(env, bridgeClass, method, view,
                                  omni_jni_pxf(env, radius), (jboolean)isCircular);
@@ -1198,7 +1273,7 @@ void omni_jni_set_clip_radius(JNIEnv *env, jobject view, float radius, int isCir
 }
 
 void omni_jni_attach_on_scroll_change(JNIEnv *env, jobject view, void* swift_ptr) {
-    jclass bridgeClass = (*env)->FindClass(env, "com/omni/OmniEventBridge");
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     jmethodID attachMethod = (*env)->GetStaticMethodID(env, bridgeClass, "attachOnScrollChange", "(Landroid/view/View;J)V");
     (*env)->CallStaticVoidMethod(env, bridgeClass, attachMethod, view, (jlong)swift_ptr);
     (*env)->DeleteLocalRef(env, bridgeClass);
@@ -1206,7 +1281,7 @@ void omni_jni_attach_on_scroll_change(JNIEnv *env, jobject view, void* swift_ptr
 
 static jobject omni_jni_call_bridge_dialog(JNIEnv *env, const char* method, const char* sig,
                                           jobject arg0, jstring arg1, void* swift_ptr) {
-    jclass bridgeClass = (*env)->FindClass(env, "com/omni/OmniEventBridge");
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     jmethodID m = (*env)->GetStaticMethodID(env, bridgeClass, method, sig);
 
     jobject dialog;
@@ -1227,13 +1302,13 @@ static jobject omni_jni_call_bridge_dialog(JNIEnv *env, const char* method, cons
 
 jobject omni_jni_present_sheet(JNIEnv *env, jobject content, void* swift_ptr,
                                float fraction, float height_dp, float corner_radius_dp,
-                               int shows_indicator, int is_dismissable) {
-    jclass bridgeClass = (*env)->FindClass(env, "com/omni/OmniEventBridge");
+                               int shows_indicator, int is_dismissable, int surface_argb) {
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     jmethodID m = (*env)->GetStaticMethodID(env, bridgeClass, "presentSheet",
-        "(Landroid/view/View;JFFFZZ)Landroid/app/Dialog;");
+        "(Landroid/view/View;JFFFZZI)Landroid/app/Dialog;");
     jobject dialog = m ? (*env)->CallStaticObjectMethod(env, bridgeClass, m, content,
         (jlong)swift_ptr, (jfloat)fraction, (jfloat)height_dp, (jfloat)corner_radius_dp,
-        (jboolean)shows_indicator, (jboolean)is_dismissable) : NULL;
+        (jboolean)shows_indicator, (jboolean)is_dismissable, (jint)surface_argb) : NULL;
     omni_jni_clear_pending(env);
     (*env)->DeleteLocalRef(env, bridgeClass);
     if (!dialog) return NULL;
@@ -1248,7 +1323,7 @@ jobject omni_jni_present_sheet(JNIEnv *env, jobject content, void* swift_ptr,
 // EventHandlerInt for the chosen button's index.
 jobject omni_jni_present_alert(JNIEnv *env, jobject anchor, const char* title, const char* message,
                                const char* titles, const char* roles, void* swift_ptr) {
-    jclass bridgeClass = (*env)->FindClass(env, "com/omni/OmniEventBridge");
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     if (!bridgeClass) { omni_jni_clear_pending(env); return NULL; }
     jmethodID m = (*env)->GetStaticMethodID(env, bridgeClass, "presentAlert",
         "(Landroid/view/View;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;J)Landroid/app/Dialog;");
@@ -1276,7 +1351,7 @@ jobject omni_jni_present_alert(JNIEnv *env, jobject anchor, const char* title, c
 }
 
 void omni_jni_dismiss_dialog(JNIEnv *env, jobject dialog) {
-    jclass bridgeClass = (*env)->FindClass(env, "com/omni/OmniEventBridge");
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     jmethodID m = (*env)->GetStaticMethodID(env, bridgeClass, "dismissDialog", "(Landroid/app/Dialog;)V");
     (*env)->CallStaticVoidMethod(env, bridgeClass, m, dialog);
     (*env)->DeleteLocalRef(env, bridgeClass);
@@ -1284,7 +1359,7 @@ void omni_jni_dismiss_dialog(JNIEnv *env, jobject dialog) {
 }
 
 void omni_jni_attach_on_layout_change(JNIEnv *env, jobject view, void* swift_ptr) {
-    jclass bridgeClass = (*env)->FindClass(env, "com/omni/OmniEventBridge");
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     jmethodID attachMethod = (*env)->GetStaticMethodID(env, bridgeClass, "attachOnLayoutChange", "(Landroid/view/View;J)V");
     (*env)->CallStaticVoidMethod(env, bridgeClass, attachMethod, view, (jlong)swift_ptr);
     (*env)->DeleteLocalRef(env, bridgeClass);
@@ -1293,6 +1368,8 @@ void omni_jni_attach_on_layout_change(JNIEnv *env, jobject view, void* swift_ptr
 void omni_jni_scroll_to(JNIEnv *env, jobject view, int x, int y) {
     jclass clazz = (*env)->GetObjectClass(env, view);
     jmethodID method = (*env)->GetMethodID(env, clazz, "scrollTo", "(II)V");
+    x = omni_jni_px(env, x);
+    y = omni_jni_px(env, y);
 
     // Android natively ignores this call if the x/y matches the current scroll position,
     // avoiding infinite scroll loops automatically.
@@ -1300,8 +1377,56 @@ void omni_jni_scroll_to(JNIEnv *env, jobject view, int x, int y) {
     (*env)->DeleteLocalRef(env, clazz);
 }
 
+void omni_jni_set_scroll_behavior(JNIEnv *env, jobject view, int paging, int disabled, void* page_ptr) {
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
+    jmethodID method = (*env)->GetStaticMethodID(env, bridgeClass, "setScrollBehavior", "(Landroid/view/View;ZZJ)V");
+    (*env)->CallStaticVoidMethod(env, bridgeClass, method, view, (jboolean)(paging != 0), (jboolean)(disabled != 0), (jlong)page_ptr);
+    (*env)->DeleteLocalRef(env, bridgeClass);
+}
+
+void omni_jni_attach_scroll_sizes(JNIEnv *env, jobject view, void* size_ptr, void* content_ptr) {
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
+    jmethodID method = (*env)->GetStaticMethodID(env, bridgeClass, "attachScrollSizes", "(Landroid/view/View;JJ)V");
+    (*env)->CallStaticVoidMethod(env, bridgeClass, method, view, (jlong)size_ptr, (jlong)content_ptr);
+    (*env)->DeleteLocalRef(env, bridgeClass);
+}
+
+/// PageScrubber: `method` is scrubPages (F), releaseScrub (F) or goToPage (I).
+static void omni_jni_call_paging(JNIEnv *env, jobject view, const char *method, const char *sig, ...) {
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
+    if (!bridgeClass) return;
+    jmethodID m = (*env)->GetStaticMethodID(env, bridgeClass, method, sig);
+    if (m) {
+        va_list args;
+        va_start(args, sig);
+        (*env)->CallStaticVoidMethodV(env, bridgeClass, m, args);
+        va_end(args);
+    }
+    omni_jni_clear_pending(env);
+    (*env)->DeleteLocalRef(env, bridgeClass);
+}
+
+void omni_jni_scrub_pages(JNIEnv *env, jobject view, float pages) {
+    omni_jni_call_paging(env, view, "scrubPages", "(Landroid/view/View;F)V", view, pages);
+}
+
+void omni_jni_release_scrub(JNIEnv *env, jobject view, float velocity) {
+    omni_jni_call_paging(env, view, "releaseScrub", "(Landroid/view/View;F)V", view, velocity);
+}
+
+void omni_jni_go_to_page(JNIEnv *env, jobject view, int page) {
+    omni_jni_call_paging(env, view, "goToPage", "(Landroid/view/View;I)V", view, (jint)page);
+}
+
+void omni_jni_show_page(JNIEnv *env, jobject view, int page) {
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
+    jmethodID method = (*env)->GetStaticMethodID(env, bridgeClass, "showPage", "(Landroid/view/View;I)V");
+    (*env)->CallStaticVoidMethod(env, bridgeClass, method, view, (jint)page);
+    (*env)->DeleteLocalRef(env, bridgeClass);
+}
+
 void omni_jni_set_spinner_options(JNIEnv *env, jobject view, const char* options_joined) {
-    jclass bridgeClass = (*env)->FindClass(env, "com/omni/OmniEventBridge");
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     jmethodID method = (*env)->GetStaticMethodID(env, bridgeClass, "setSpinnerOptions", "(Landroid/widget/Spinner;Ljava/lang/String;)V");
 
     jstring jStr = (*env)->NewStringUTF(env, options_joined);
@@ -1312,7 +1437,7 @@ void omni_jni_set_spinner_options(JNIEnv *env, jobject view, const char* options
 }
 
 void omni_jni_attach_on_item_selected(JNIEnv *env, jobject view, void* swift_ptr) {
-    jclass bridgeClass = (*env)->FindClass(env, "com/omni/OmniEventBridge");
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     jmethodID attachMethod = (*env)->GetStaticMethodID(env, bridgeClass, "attachOnItemSelected", "(Landroid/widget/AdapterView;J)V");
     (*env)->CallStaticVoidMethod(env, bridgeClass, attachMethod, view, (jlong)swift_ptr);
     (*env)->DeleteLocalRef(env, bridgeClass);
@@ -1383,7 +1508,7 @@ int omni_jni_check_self_permission(JNIEnv *env, jobject activity, const char* pe
 }
 
 void omni_jni_request_permission(JNIEnv *env, jobject activity, const char* permission, int requestCode, void* swift_ptr) {
-    jclass bridgeClass = (*env)->FindClass(env, "com/omni/OmniEventBridge");
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     jmethodID method = (*env)->GetStaticMethodID(env, bridgeClass, "requestPermission",
         "(Landroid/app/Activity;Ljava/lang/String;IJ)V");
     if (method) {
@@ -1398,7 +1523,7 @@ void omni_jni_request_permission(JNIEnv *env, jobject activity, const char* perm
 }
 
 int omni_jni_launch_camera_capture(JNIEnv *env, jobject activity, const char* outputPath, int requestCode, int frontFacing, void* swift_ptr) {
-    jclass bridgeClass = (*env)->FindClass(env, "com/omni/OmniEventBridge");
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     jmethodID method = (*env)->GetStaticMethodID(env, bridgeClass, "launchCameraCapture",
         "(Landroid/app/Activity;Ljava/lang/String;IZJ)Z");
     jboolean started = JNI_FALSE;
@@ -1415,7 +1540,7 @@ int omni_jni_launch_camera_capture(JNIEnv *env, jobject activity, const char* ou
 }
 
 void omni_jni_launch_image_pick(JNIEnv *env, jobject activity, int requestCode, void* swift_ptr) {
-    jclass bridgeClass = (*env)->FindClass(env, "com/omni/OmniEventBridge");
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     jmethodID method = (*env)->GetStaticMethodID(env, bridgeClass, "launchImagePick",
         "(Landroid/app/Activity;IJ)V");
     if (method) {
@@ -1431,7 +1556,7 @@ void omni_jni_launch_image_pick(JNIEnv *env, jobject activity, int requestCode, 
 // MARK: - Keystore (OmniKeychain)
 
 static jclass omni_keystore_class(JNIEnv *env) {
-    jclass clazz = (*env)->FindClass(env, "com/omni/OmniKeystore");
+    jclass clazz = omni_jni_app_class(env, "com/omni/OmniKeystore");
     if (!clazz) omni_jni_clear_pending(env);
     return clazz;
 }
@@ -1509,7 +1634,7 @@ int omni_jni_keystore_delete(JNIEnv *env, jobject context, const char *key) {
 // MARK: - Device keys (OmniKeychain)
 
 static jclass omni_device_key_class(JNIEnv *env) {
-    jclass clazz = (*env)->FindClass(env, "com/omni/OmniDeviceKey");
+    jclass clazz = omni_jni_app_class(env, "com/omni/OmniDeviceKey");
     if (!clazz) omni_jni_clear_pending(env);
     return clazz;
 }
@@ -1582,7 +1707,7 @@ int omni_jni_device_key_delete(JNIEnv *env, jobject context, const char *tag) {
 // MARK: - Approval keys (OmniKeychain)
 
 static jclass omni_approval_key_class(JNIEnv *env) {
-    jclass clazz = (*env)->FindClass(env, "com/omni/OmniApprovalKey");
+    jclass clazz = omni_jni_app_class(env, "com/omni/OmniApprovalKey");
     if (!clazz) omni_jni_clear_pending(env);
     return clazz;
 }
@@ -1752,7 +1877,7 @@ char* omni_jni_attest_token(const char *requestHash) {
 
 uint8_t* omni_jni_read_uri(JNIEnv *env, jobject activity, const char* uri, int* outLength) {
     *outLength = 0;
-    jclass bridgeClass = (*env)->FindClass(env, "com/omni/OmniEventBridge");
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     jmethodID method = (*env)->GetStaticMethodID(env, bridgeClass, "readUri",
         "(Landroid/content/Context;Ljava/lang/String;)[B");
     if (!method) {
@@ -1816,7 +1941,7 @@ static char* omni_jni_context_dir(JNIEnv *env, jobject activity, const char* get
 uint8_t* omni_jni_encode_image(JNIEnv *env, const uint8_t* input, int inputLength,
                                int maxDimension, const char* format, double quality, int* outLength) {
     *outLength = 0;
-    jclass bridgeClass = (*env)->FindClass(env, "com/omni/OmniEventBridge");
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     jmethodID method = (*env)->GetStaticMethodID(env, bridgeClass, "encodeImage", "([BILjava/lang/String;D)[B");
     if (!method) {
         omni_jni_clear_pending(env);
@@ -1849,7 +1974,7 @@ uint8_t* omni_jni_encode_image(JNIEnv *env, const uint8_t* input, int inputLengt
 void omni_jni_image_dimensions(JNIEnv *env, const uint8_t* data, int length, int* outWidth, int* outHeight) {
     *outWidth = 0;
     *outHeight = 0;
-    jclass bridgeClass = (*env)->FindClass(env, "com/omni/OmniEventBridge");
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     jmethodID method = (*env)->GetStaticMethodID(env, bridgeClass, "imageDimensions", "([B)[I");
     if (!method) {
         omni_jni_clear_pending(env);
@@ -1883,13 +2008,32 @@ JNIEXPORT void JNICALL Java_com_omni_OmniEventBridge_dispatchActivity(JNIEnv *en
     omni_swift_user_activity();
 }
 
+extern void omni_swift_safe_area(float top, float bottom);
+
+JNIEXPORT void JNICALL Java_com_omni_OmniEventBridge_dispatchSafeArea(JNIEnv *env, jclass clazz, jfloat top, jfloat bottom) {
+    omni_swift_safe_area(top, bottom);
+}
+
 // Keyboard.dismiss; see OmniEventBridge.dismissKeyboard.
 void omni_jni_dismiss_keyboard(JNIEnv *env) {
-    jclass bridgeClass = (*env)->FindClass(env, "com/omni/OmniEventBridge");
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     if (!bridgeClass) { omni_jni_clear_pending(env); return; }
     jmethodID method = (*env)->GetStaticMethodID(env, bridgeClass, "dismissKeyboard", "()V");
     if (method) {
         (*env)->CallStaticVoidMethod(env, bridgeClass, method);
+    } else {
+        omni_jni_clear_pending(env);
+    }
+    (*env)->DeleteLocalRef(env, bridgeClass);
+}
+
+// Keyboard.coversContent; see OmniEventBridge.setKeyboardCovers.
+void omni_jni_set_keyboard_covers(JNIEnv *env, int covers) {
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
+    if (!bridgeClass) { omni_jni_clear_pending(env); return; }
+    jmethodID method = (*env)->GetStaticMethodID(env, bridgeClass, "setKeyboardCovers", "(Z)V");
+    if (method) {
+        (*env)->CallStaticVoidMethod(env, bridgeClass, method, covers ? JNI_TRUE : JNI_FALSE);
     } else {
         omni_jni_clear_pending(env);
     }

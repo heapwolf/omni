@@ -19,6 +19,10 @@ import android.view.View;
 import android.view.ViewOutlineProvider;
 import android.view.GestureDetector;
 import android.view.MotionEvent;
+import android.view.VelocityTracker;
+import android.view.ViewGroup;
+import android.widget.HorizontalScrollView;
+import android.widget.ScrollView;
 import android.widget.ArrayAdapter;
 import android.widget.AdapterView;
 import android.widget.CompoundButton;
@@ -107,6 +111,8 @@ public class OmniEventBridge {
     /// Interactions' activity: MainActivity's dispatchTouchEvent, for each
     /// finger going down.
     public static native void dispatchActivity();
+    /// Engine.safeArea: the status bar's and the navigation bar's heights, in dp.
+    public static native void dispatchSafeArea(float top, float bottom);
 
     /// Keyboard.dismiss: the keyboard goes, and the focused field loses focus.
     public static void dismissKeyboard() {
@@ -118,6 +124,21 @@ public class OmniEventBridge {
                 .getSystemService(Context.INPUT_METHOD_SERVICE);
         if (keyboard != null) keyboard.hideSoftInputFromWindow(focused.getWindowToken(), 0);
         focused.clearFocus();
+    }
+
+    /// Keyboard.coversContent: the keyboard covers the root instead of the
+    /// root's padding taking its height.
+    private static boolean keyboardCovers = false;
+
+    public static void setKeyboardCovers(boolean covers) {
+        if (keyboardCovers == covers) return;
+        keyboardCovers = covers;
+        if (hostActivity != null) {
+            hostActivity.getWindow().setSoftInputMode(covers
+                ? android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
+                : android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+        }
+        if (rootHost != null) rootHost.requestApplyInsets();
     }
 
     public static native void dispatchCameraPermissionResult(long ptr, boolean granted);
@@ -232,9 +253,15 @@ public class OmniEventBridge {
         });
     }
 
+    /// Pixels back to the dp Swift lays out in: sizes and positions go out as dp
+    /// (JNIBridge's omni_jni_px), so the ones that come back must too.
+    static float dp(View view, float px) {
+        return px / view.getResources().getDisplayMetrics().density;
+    }
+
     public static void attachOnScrollChange(View view, long ptr) {
         view.setOnScrollChangeListener((v, scrollX, scrollY, oldScrollX, oldScrollY) -> {
-            dispatchFloat2(ptr, (float) scrollX, (float) scrollY);
+            dispatchFloat2(ptr, dp(v, scrollX), dp(v, scrollY));
         });
     }
 
@@ -244,9 +271,121 @@ public class OmniEventBridge {
     ///
     /// `fraction` of the screen's height, or `heightDp` when it is positive. A
     /// large sheet stops short of the top, as on iOS.
+    /// A sheet's surface: clipped to a rounded rectangle whose bottom corners lie
+    /// below it, so only the top ones round (a path outline clipped poorly and a
+    /// fringe showed at the corners), and dragged down to dismiss, as on iOS:
+    /// a downward drag the content under the finger can't scroll moves the
+    /// sheet; let go past a quarter of it, or flung, it goes.
+    static final class SheetHost extends android.widget.FrameLayout {
+        Dialog dialog;
+        boolean isDismissable;
+        private final float radius;
+        private final int slop;
+        private float downX, downY, lastY;
+        private boolean dragging;
+        private VelocityTracker tracker;
+
+        SheetHost(Context context, float radius) {
+            super(context);
+            this.radius = radius;
+            this.slop = android.view.ViewConfiguration.get(context).getScaledTouchSlop();
+            setOutlineProvider(new ViewOutlineProvider() {
+                @Override public void getOutline(View view, Outline outline) {
+                    outline.setRoundRect(0, 0, view.getWidth(), view.getHeight() + Math.round(SheetHost.this.radius),
+                                         SheetHost.this.radius);
+                }
+            });
+            setClipToOutline(true);
+        }
+
+        /// Whether something under (x, y) would scroll up, so the drag is its.
+        private static boolean scrollsUp(View view, float x, float y) {
+            if (x < view.getLeft() || x >= view.getRight() || y < view.getTop() || y >= view.getBottom()) return false;
+            if (view.canScrollVertically(-1)) return true;
+            if (view instanceof ViewGroup) {
+                ViewGroup group = (ViewGroup) view;
+                float cx = x - view.getLeft() + view.getScrollX(), cy = y - view.getTop() + view.getScrollY();
+                for (int i = group.getChildCount() - 1; i >= 0; i--) {
+                    if (scrollsUp(group.getChildAt(i), cx, cy)) return true;
+                }
+            }
+            return false;
+        }
+
+        private void track(MotionEvent e) {
+            if (e.getActionMasked() == MotionEvent.ACTION_DOWN) {
+                if (tracker != null) tracker.recycle();
+                tracker = VelocityTracker.obtain();
+            }
+            if (tracker != null) {
+                MotionEvent raw = MotionEvent.obtain(e);
+                raw.setLocation(e.getRawX(), e.getRawY());
+                tracker.addMovement(raw);
+                raw.recycle();
+            }
+        }
+
+        @Override public boolean onInterceptTouchEvent(MotionEvent e) {
+            if (!isDismissable) return false;
+            track(e);
+            switch (e.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    downX = e.getRawX(); downY = e.getRawY(); lastY = downY; dragging = false;
+                    return false;
+                case MotionEvent.ACTION_MOVE:
+                    float dy = e.getRawY() - downY, dx = e.getRawX() - downX;
+                    if (dy > slop && dy > Math.abs(dx) * 1.5f && !scrollsUp(getChildAt(0), e.getX(), e.getY())) {
+                        dragging = true;
+                        lastY = e.getRawY();
+                        return true;
+                    }
+                    return false;
+                default:
+                    return false;
+            }
+        }
+
+        @Override public boolean onTouchEvent(MotionEvent e) {
+            if (!isDismissable) return false;
+            track(e);
+            switch (e.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    downX = e.getRawX(); downY = e.getRawY(); lastY = downY;
+                    return true;
+                case MotionEvent.ACTION_MOVE:
+                    if (!dragging && e.getRawY() - downY > slop) dragging = true;
+                    if (dragging) setTranslationY(Math.max(0, getTranslationY() + e.getRawY() - lastY));
+                    lastY = e.getRawY();
+                    return true;
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    float velocity = 0;
+                    if (tracker != null) {
+                        tracker.computeCurrentVelocity(1000);
+                        velocity = tracker.getYVelocity();
+                        tracker.recycle();
+                        tracker = null;
+                    }
+                    float fling = 1000 * getResources().getDisplayMetrics().density;
+                    boolean goes = dragging && (getTranslationY() > getHeight() * 0.25f || velocity > fling);
+                    dragging = false;
+                    if (goes) {
+                        animate().translationY(getHeight()).setDuration(180).withEndAction(() -> {
+                            if (dialog != null) dialog.dismiss();
+                        }).start();
+                    } else {
+                        animate().translationY(0).setDuration(200).start();
+                    }
+                    return true;
+                default:
+                    return true;
+            }
+        }
+    }
+
     public static Dialog presentSheet(View content, long onDismissPtr, float fraction,
                                       float heightDp, float cornerRadiusDp,
-                                      boolean showsIndicator, boolean isDismissable) {
+                                      boolean showsIndicator, boolean isDismissable, int surfaceColor) {
         Context ctx = content.getContext();
         float density = ctx.getResources().getDisplayMetrics().density;
         int screen = ctx.getResources().getDisplayMetrics().heightPixels;
@@ -255,13 +394,11 @@ public class OmniEventBridge {
         dialog.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE);
 
         float radius = cornerRadiusDp * density;
-        GradientDrawable surface = new GradientDrawable();
-        surface.setColor(Color.WHITE);
-        surface.setCornerRadii(new float[] { radius, radius, radius, radius, 0, 0, 0, 0 });
-
-        android.widget.FrameLayout host = new android.widget.FrameLayout(ctx);
-        host.setBackground(surface);
-        host.setClipToOutline(true);
+        // The scheme's sheet colour, from Swift: white behind dark content was the fringe.
+        SheetHost host = new SheetHost(ctx, radius);
+        host.setBackgroundColor(surfaceColor);
+        host.dialog = dialog;
+        host.isDismissable = isDismissable;
         host.addView(content, new android.widget.FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
@@ -365,23 +502,31 @@ public class OmniEventBridge {
     public static void attachOnLayoutChange(View view, long ptr) {
         view.addOnLayoutChangeListener((v, left, top, right, bottom,
                                         oldLeft, oldTop, oldRight, oldBottom) -> {
-            dispatchFloat2(ptr, (float) (right - left), (float) (bottom - top));
+            dispatchFloat2(ptr, dp(v, right - left), dp(v, bottom - top));
         });
     }
 
-    public static void attachFrameGestures(View view, long tapPtr, long tapLocPtr, long dragPtr, long scrollPtr) {
+    public static void attachFrameGestures(View view, long tapPtr, long tapLocPtr, long dragPtr, long dragEndPtr, long scrollPtr) {
+        final boolean[] dragging = {false};
+        final VelocityTracker[] tracker = {null};
         final GestureDetector detector = new GestureDetector(view.getContext(), new GestureDetector.SimpleOnGestureListener() {
             @Override
             public boolean onSingleTapUp(MotionEvent e) {
                 if (tapPtr != 0) dispatchVoid(tapPtr);
-                if (tapLocPtr != 0) dispatchFloat2(tapLocPtr, e.getX(), e.getY());
+                if (tapLocPtr != 0) dispatchFloat2(tapLocPtr, dp(view, e.getX()), dp(view, e.getY()));
                 return (tapPtr != 0 || tapLocPtr != 0);
             }
 
             @Override
             public boolean onScroll(MotionEvent e1, MotionEvent e2, float distanceX, float distanceY) {
                 if (dragPtr != 0) {
-                    dispatchFloat2(dragPtr, -distanceX, -distanceY);
+                    // A sideways drag is this view's: a pager or scroll view holding it
+                    // mustn't take it over partway.
+                    if (!dragging[0] && Math.abs(distanceX) > Math.abs(distanceY) && view.getParent() != null) {
+                        view.getParent().requestDisallowInterceptTouchEvent(true);
+                    }
+                    dragging[0] = true;
+                    dispatchFloat2(dragPtr, dp(view, -distanceX), dp(view, -distanceY));
                     return true;
                 }
                 return false;
@@ -389,7 +534,30 @@ public class OmniEventBridge {
         });
 
         view.setOnTouchListener((v, event) -> {
+            if (dragPtr != 0) {
+                if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+                    dragging[0] = false;
+                    if (tracker[0] != null) tracker[0].recycle();
+                    tracker[0] = VelocityTracker.obtain();
+                }
+                // Raw coordinates: the view may move under the finger as it's dragged.
+                MotionEvent raw = MotionEvent.obtain(event);
+                raw.setLocation(event.getRawX(), event.getRawY());
+                if (tracker[0] != null) tracker[0].addMovement(raw);
+                raw.recycle();
+            }
+
             boolean handled = detector.onTouchEvent(event);
+
+            int action = event.getActionMasked();
+            if ((action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) && tracker[0] != null) {
+                tracker[0].computeCurrentVelocity(1000);
+                float vx = tracker[0].getXVelocity(), vy = tracker[0].getYVelocity();
+                tracker[0].recycle();
+                tracker[0] = null;
+                if (dragging[0] && dragEndPtr != 0) dispatchFloat2(dragEndPtr, dp(view, vx), dp(view, vy));
+                dragging[0] = false;
+            }
 
             if (event.getAction() == MotionEvent.ACTION_SCROLL && scrollPtr != 0) {
                 float hScroll = event.getAxisValue(MotionEvent.AXIS_HSCROLL);
@@ -400,6 +568,222 @@ public class OmniEventBridge {
 
             return handled || (tapPtr != 0 || tapLocPtr != 0 || dragPtr != 0 || scrollPtr != 0);
         });
+    }
+
+    /// A scroll view's paging, its stillness, and its sizes for Swift's
+    /// onScrollGeometryChange. Paged, letting go settles on the nearest page,
+    /// carried to the next by a fling, and tells `pagePtr` of it; `showPage`
+    /// slides to one set from code.
+    static final class Paging {
+        final ViewGroup view;
+        final boolean horizontal;
+        long pagePtr, sizePtr, contentPtr;
+        boolean paging, disabled;
+        int shown = -1, pending = -1;
+        VelocityTracker tracker;
+
+        Paging(ViewGroup view, boolean horizontal) { this.view = view; this.horizontal = horizontal; }
+
+        int length() { return horizontal ? view.getWidth() : view.getHeight(); }
+        int offset() { return horizontal ? view.getScrollX() : view.getScrollY(); }
+
+        int count() {
+            int length = length();
+            if (view.getChildCount() == 0 || length == 0) return 1;
+            View content = view.getChildAt(0);
+            int extent = horizontal ? content.getWidth() : content.getHeight();
+            return Math.max(1, Math.round((float) extent / length));
+        }
+
+        void scroll(int page, boolean animated) {
+            int to = page * length();
+            int x = horizontal ? to : 0, y = horizontal ? 0 : to;
+            if (!animated) { view.scrollTo(x, y); return; }
+            if (horizontal) ((HorizontalScrollView) view).smoothScrollTo(x, y);
+            else ((ScrollView) view).smoothScrollTo(x, y);
+        }
+
+        void show(int page) {
+            if (length() == 0) { pending = page; return; }
+            if (page == shown) return;
+            boolean first = shown < 0;
+            shown = page;
+            scroll(page, !first);
+        }
+
+        /// Every event, before the scroll view or a child sees it.
+        void track(MotionEvent e) {
+            if (!paging) return;
+            if (e.getActionMasked() == MotionEvent.ACTION_DOWN) {
+                if (tracker != null) tracker.recycle();
+                tracker = VelocityTracker.obtain();
+            }
+            if (tracker != null) tracker.addMovement(e);
+        }
+
+        /// The scroll view's own onTouchEvent; `superTouch` is its super's.
+        /// True when it's handled here.
+        boolean touch(MotionEvent e, java.util.function.Predicate<MotionEvent> superTouch) {
+            if (disabled) return true;
+            int action = e.getActionMasked();
+            if (!paging || (action != MotionEvent.ACTION_UP && action != MotionEvent.ACTION_CANCEL)) {
+                return superTouch.test(e);
+            }
+            float velocity = 0;
+            if (tracker != null) {
+                tracker.computeCurrentVelocity(1000);
+                velocity = horizontal ? tracker.getXVelocity() : tracker.getYVelocity();
+                tracker.recycle();
+                tracker = null;
+            }
+            // The scroll view lets go without a fling of its own; this settles it.
+            MotionEvent cancel = MotionEvent.obtain(e);
+            cancel.setAction(MotionEvent.ACTION_CANCEL);
+            superTouch.test(cancel);
+            cancel.recycle();
+            settle(velocity);
+            return true;
+        }
+
+        void settle(float velocity) {
+            int length = length();
+            if (length == 0) return;
+            float at = (float) offset() / length;
+            int target = Math.round(at);
+            float fling = 400 * view.getResources().getDisplayMetrics().density;
+            if (Math.abs(velocity) > fling) {
+                target = velocity < 0 ? (int) Math.floor(at) + 1 : (int) Math.ceil(at) - 1;
+            }
+            target = Math.max(0, Math.min(count() - 1, target));
+            scroll(target, true);
+            if (target != shown) {
+                shown = target;
+                if (pagePtr != 0) dispatchInt(pagePtr, target);
+                Log.i("OmniLayout", "settled on page " + target + " at " + dp(view, offset()));
+                dumpTree(view.getRootView());
+            }
+        }
+
+        /// PageScrubber.move: the pages moved by `pages` of a page, at once.
+        void scrub(float pages) {
+            int length = length();
+            if (length == 0 || view.getChildCount() == 0) return;
+            View content = view.getChildAt(0);
+            int farthest = Math.max((horizontal ? content.getWidth() : content.getHeight()) - length, 0);
+            int next = Math.max(0, Math.min(farthest, Math.round(offset() + pages * length)));
+            view.scrollTo(horizontal ? next : 0, horizontal ? 0 : next);
+        }
+
+        /// PageScrubber.release, at `velocity` pages a second: the nearest page a
+        /// fifth of a second's travel on, slid to, and told once it's there, as iOS.
+        void releaseScrub(float velocity) {
+            int length = length();
+            if (length == 0) return;
+            float at = (float) offset() / length + velocity * 0.2f;
+            go(Math.max(0, Math.min(count() - 1, Math.round(at))));
+        }
+
+        /// PageScrubber.go, and a release: slides to `page`, telling it once there.
+        /// Told at once, the app's render for the new page held the slide's start.
+        void go(final int page) {
+            if (length() == 0) return;
+            scroll(page, true);
+            view.postDelayed(() -> {
+                if (page != shown) {
+                    shown = page;
+                    if (pagePtr != 0) dispatchInt(pagePtr, page);
+                }
+            }, 280);
+        }
+
+        /// After a layout: a page asked for before there was a size, the page
+        /// kept through a new size, and the sizes told to Swift.
+        void laidOut(boolean resized) {
+            if (length() == 0) return;
+            if (pending >= 0) {
+                int page = pending;
+                pending = -1;
+                shown = page;
+                scroll(page, false);
+            } else if (paging && resized && shown >= 0) {
+                scroll(shown, false);
+            }
+            if (sizePtr != 0) dispatchFloat2(sizePtr, dp(view, view.getWidth()), dp(view, view.getHeight()));
+            if (contentPtr != 0 && view.getChildCount() > 0) {
+                View content = view.getChildAt(0);
+                dispatchFloat2(contentPtr, dp(view, content.getWidth()), dp(view, content.getHeight()));
+            }
+        }
+    }
+
+    public static class OmniHorizontalScrollView extends HorizontalScrollView {
+        final Paging paging = new Paging(this, true);
+        public OmniHorizontalScrollView(Context context) { super(context); }
+
+        @Override public boolean dispatchTouchEvent(MotionEvent e) { paging.track(e); return super.dispatchTouchEvent(e); }
+        @Override public boolean onInterceptTouchEvent(MotionEvent e) { return !paging.disabled && super.onInterceptTouchEvent(e); }
+        @Override public boolean onTouchEvent(MotionEvent e) { return paging.touch(e, super::onTouchEvent); }
+        @Override protected void onLayout(boolean changed, int l, int t, int r, int b) {
+            int before = getWidth();
+            super.onLayout(changed, l, t, r, b);
+            paging.laidOut(changed && before != r - l);
+        }
+    }
+
+    public static class OmniVerticalScrollView extends ScrollView {
+        final Paging paging = new Paging(this, false);
+        public OmniVerticalScrollView(Context context) { super(context); }
+
+        @Override public boolean dispatchTouchEvent(MotionEvent e) { paging.track(e); return super.dispatchTouchEvent(e); }
+        @Override public boolean onInterceptTouchEvent(MotionEvent e) { return !paging.disabled && super.onInterceptTouchEvent(e); }
+        @Override public boolean onTouchEvent(MotionEvent e) { return paging.touch(e, super::onTouchEvent); }
+        @Override protected void onLayout(boolean changed, int l, int t, int r, int b) {
+            int before = getHeight();
+            super.onLayout(changed, l, t, r, b);
+            paging.laidOut(changed && before != b - t);
+        }
+    }
+
+    private static Paging paging(View view) {
+        if (view instanceof OmniHorizontalScrollView) return ((OmniHorizontalScrollView) view).paging;
+        if (view instanceof OmniVerticalScrollView) return ((OmniVerticalScrollView) view).paging;
+        return null;
+    }
+
+    public static void setScrollBehavior(View view, boolean paged, boolean disabled, long pagePtr) {
+        Paging paging = paging(view);
+        if (paging == null) return;
+        paging.paging = paged;
+        paging.disabled = disabled;
+        paging.pagePtr = pagePtr;
+    }
+
+    public static void scrubPages(View view, float pages) {
+        Paging paging = paging(view);
+        if (paging != null) paging.scrub(pages);
+    }
+
+    public static void releaseScrub(View view, float velocity) {
+        Paging paging = paging(view);
+        if (paging != null) paging.releaseScrub(velocity);
+    }
+
+    public static void goToPage(View view, int page) {
+        Paging paging = paging(view);
+        if (paging != null) paging.go(page);
+    }
+
+    public static void showPage(View view, int page) {
+        Paging paging = paging(view);
+        if (paging != null) paging.show(page);
+    }
+
+    /// The scroll view's size and its content's, in dp, after each layout.
+    public static void attachScrollSizes(View view, long sizePtr, long contentPtr) {
+        Paging paging = paging(view);
+        if (paging == null) return;
+        paging.sizePtr = sizePtr;
+        paging.contentPtr = contentPtr;
     }
 
 
@@ -728,8 +1112,58 @@ public class OmniEventBridge {
 
     /// .foregroundColor for the symbols under `view`. A photo or an asset keeps
     /// its own colors, as in SwiftUI.
+    /// .offset (px) and .scaleEffect. Drawn moved, as on iOS, where nothing
+    /// clips unless asked: a FrameLayout clips its children to its bounds, and
+    /// one faded draws them into a layer its size, so an offset label past its
+    /// wrapper vanished. Its ancestors stop doing either, up to a scroll view,
+    /// whose content must stay inside it. Posted: on the first render the view
+    /// isn't in its parent yet.
+    public static void setTransform(final View view, float x, float y, float scale) {
+        view.setTranslationX(x);
+        view.setTranslationY(y);
+        view.setScaleX(scale);
+        view.setScaleY(scale);
+        if (x == 0 && y == 0 && scale == 1) return;
+        view.post(() -> {
+            android.view.ViewParent parent = view.getParent();
+            while (parent instanceof ViewGroup
+                    && !(parent instanceof HorizontalScrollView) && !(parent instanceof ScrollView)) {
+                ViewGroup group = (ViewGroup) parent;
+                group.setClipChildren(false);
+                group.forceHasOverlappingRendering(false);
+                parent = group.getParent();
+            }
+        });
+    }
+
+    /// .shadow: elevation, the platform's drop shadow, on the content inside
+    /// `container`. Not on the container: Android draws siblings by elevation,
+    /// so a shadowed circle drew over the icon after it in a ZStack. The
+    /// container stays flat, in its place among them; the content's own outline
+    /// (a circle, a rounded card) shapes the shadow, which spills past the
+    /// container and its parent as on iOS. Posted: the content isn't inserted yet.
+    public static void setShadow(final View container, final float elevation) {
+        container.setElevation(0);
+        container.post(() -> {
+            if (!(container instanceof ViewGroup) || ((ViewGroup) container).getChildCount() == 0) return;
+            ViewGroup group = (ViewGroup) container;
+            group.getChildAt(0).setElevation(elevation);
+            group.setClipChildren(false);
+            if (group.getParent() instanceof ViewGroup) ((ViewGroup) group.getParent()).setClipChildren(false);
+        });
+    }
+
+    /// Image's .scaledToFill (crop to fill the view) or .scaledToFit (whole, centred).
+    public static void setImageScale(ImageView view, boolean fill) {
+        view.setScaleType(fill ? ImageView.ScaleType.CENTER_CROP : ImageView.ScaleType.FIT_CENTER);
+        view.setAdjustViewBounds(false);
+    }
+
+    /// A .foregroundColor: symbols, and text (labels and fields), as on iOS.
     public static void tintSymbols(View view, int argb) {
-        if (view instanceof ImageView) {
+        if (view instanceof TextView) {
+            ((TextView) view).setTextColor(argb);
+        } else if (view instanceof ImageView) {
             ImageView image = (ImageView) view;
             if (image.getDrawable() instanceof OmniSymbol) {
                 image.setColorFilter(argb, android.graphics.PorterDuff.Mode.SRC_IN);
@@ -978,15 +1412,20 @@ public class OmniEventBridge {
                     android.view.WindowInsets.Type.systemBars() | android.view.WindowInsets.Type.displayCutout());
                 android.graphics.Insets keyboard = insets.getInsets(android.view.WindowInsets.Type.ime());
                 left = bars.left; top = bars.top; right = bars.right;
-                bottom = Math.max(bars.bottom, keyboard.bottom);
+                bottom = keyboardCovers ? bars.bottom : Math.max(bars.bottom, keyboard.bottom);
             } else {
-                // Includes the keyboard, under adjustResize.
+                // Includes the keyboard, under adjustResize; the stable inset leaves it out.
                 left = insets.getSystemWindowInsetLeft();
                 top = insets.getSystemWindowInsetTop();
                 right = insets.getSystemWindowInsetRight();
-                bottom = insets.getSystemWindowInsetBottom();
+                bottom = keyboardCovers ? insets.getStableInsetBottom() : insets.getSystemWindowInsetBottom();
             }
             v.setPadding(left, top, right, bottom);
+            // What the content under the bars (.ignoresSafeArea) must keep clear
+            // of; the keyboard isn't part of it, as on iOS.
+            int barsBottom = keyboardCovers || android.os.Build.VERSION.SDK_INT < 30 ? bottom
+                : insets.getInsets(android.view.WindowInsets.Type.systemBars()).bottom;
+            dispatchSafeArea(dp(v, top), dp(v, barsBottom));
             return insets;
         });
         activity.setContentView(host);
@@ -1365,13 +1804,16 @@ public class OmniEventBridge {
         int flags = root.getContext().getApplicationInfo().flags;
         if ((flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) == 0) return;
 
-        root.post(new Runnable() {
+        Runnable dump = new Runnable() {
             @Override public void run() {
                 Log.i("OmniLayout", "--- view tree ---");
                 dumpNode(root, 0);
                 Log.i("OmniLayout", "--- end ---");
             }
-        });
+        };
+        // Once laid out and drawn: at the next post most views have no size yet,
+        // and a swipe's slide takes a moment to land.
+        root.postDelayed(dump, 900);
     }
 
     private static String describeSize(int value) {
@@ -1398,6 +1840,17 @@ public class OmniEventBridge {
             }
         }
         if (view.getVisibility() != View.VISIBLE) line.append(" hidden");
+        if (view.getTranslationX() != 0 || view.getTranslationY() != 0) {
+            line.append(" moved=").append(view.getTranslationX()).append(',').append(view.getTranslationY());
+        }
+        if (view.getScaleX() != 1 || view.getScaleY() != 1) line.append(" scale=").append(view.getScaleX());
+        if (view.getAlpha() != 1) line.append(" alpha=").append(view.getAlpha());
+        if (view instanceof TextView) {
+            CharSequence text = ((TextView) view).getText();
+            if (text != null && text.length() > 0) {
+                line.append(" \"").append(text.length() > 24 ? text.subSequence(0, 24) + "…" : text).append('"');
+            }
+        }
         Log.i("OmniLayout", line.toString());
 
         if (view instanceof ViewGroup) {
