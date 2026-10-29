@@ -27,6 +27,7 @@ extension TextEditor {
     }
 
     @MainActor public func updateNative(_ view: NativeView) {
+        OmniAndroid.syncFocus(view, focusBinding)
         let binding = text
         syncTextField(view, to: binding.wrappedValue, handlers: &textEditorHandlerRegistry) { newText in
             binding.wrappedValue = newText

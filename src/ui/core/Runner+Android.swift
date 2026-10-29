@@ -17,6 +17,14 @@
         ) {
             guard let env, let activity else { return }
             omni_jni_init(env, activity)
+            // Android recreated the activity in a process still running the app (in the
+            // background, say): the same app, with its state, moved into the new window.
+            // A second app, put in the old window, left the new one blank.
+            if let root = Engine.root {
+                if let native = root.native { omni_jni_install_root(OmniAndroid.env, omni_jni_activity(), native) }
+                Appearance.windowDidAppear()
+                return
+            }
             AndroidRunner().run(app())
         }
     }
@@ -48,6 +56,8 @@
             let root = Node(app)
             Engine.root = root
             Engine.render(root)
+            // The system's scheme, which the first render (in light) didn't know.
+            Appearance.windowDidAppear()
 
             DeepLink.install(app.window.onOpenURL)
         }

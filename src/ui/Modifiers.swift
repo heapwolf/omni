@@ -376,6 +376,9 @@ public struct ModifierView: NativeComponent {
             let env = OmniAndroid.getEnv()
 
             if let opacity { omni_jni_set_alpha(env, view, Float(opacity)) }
+            // Over its siblings, as iOS's zPosition: Android draws them by elevation. A
+            // wrapper with no background casts no shadow of its own.
+            if let zIndex { omni_jni_set_elevation(env, view, Float(max(0, zIndex))) }
             // Put back once unset, as an animation's or transition's last frame leaves it.
             if offsetX != nil || offsetY != nil || scale != nil {
                 omni_jni_set_transform(env, view, Float(offsetX ?? 0), Float(offsetY ?? 0), Float(scale ?? 1))
@@ -408,18 +411,25 @@ public struct ModifierView: NativeComponent {
             }
 
             // An unset axis is left as the parent generated it: forcing WRAP_CONTENT
-            // collapses a wrapper whose content has no intrinsic size.
+            // collapses a wrapper whose content has no intrinsic size. In a stack, a
+            // fill along the stack is the stack's to size (by weight, from insertChild):
+            // set to MATCH_PARENT again on each render, a key-wide Spacer took its whole
+            // keypad row, and the 0 and delete keys beside it got none.
+            let stackAxis = omni_jni_parent_orientation(env, view)
+            let fillWidth = fillsWidth && stackAxis != 0, fillHeight = fillsHeight && stackAxis != 1
             omni_jni_set_layout_params(
                 env, view,
-                width.map { Int32($0) } ?? Int32(fillsWidth ? MATCH_PARENT : OMNI_LAYOUT_KEEP),
-                height.map { Int32($0) } ?? Int32(fillsHeight ? MATCH_PARENT : OMNI_LAYOUT_KEEP))
+                width.map { Int32($0) } ?? Int32(fillWidth ? MATCH_PARENT : OMNI_LAYOUT_KEEP),
+                height.map { Int32($0) } ?? Int32(fillHeight ? MATCH_PARENT : OMNI_LAYOUT_KEEP))
 
             if minWidth != nil || minHeight != nil {
                 omni_jni_set_minimum_size(env, view, Float(minWidth ?? 0), Float(minHeight ?? 0))
             }
 
-            // A fixed dimension is a promise not to grow along it.
-            AndroidExpansion.pin(view, width: width != nil, height: height != nil)
+            // A fixed dimension is a promise not to grow along it, and so is a finite
+            // maximum: a Spacer capped at a key's height made its keypad stretch.
+            AndroidExpansion.pin(view, width: width != nil || maxWidth?.isFinite == true,
+                                 height: height != nil || maxHeight?.isFinite == true)
 
             // Additive: a claim carried up from a child must survive.
             if fillsWidth || fillsHeight {
@@ -1354,7 +1364,7 @@ public struct ShadowModifierView: NativeComponent {
             view.layer.shadowOpacity = 1
             view.layer.shadowOffset = CGSize(width: x, height: y)
         #elseif os(Android)
-            omni_jni_set_shadow(OmniAndroid.getEnv(), view, Float(radius))
+            omni_jni_set_shadow(OmniAndroid.getEnv(), view, Float(radius), EffectBackgroundView.argb(color))
         #endif
     }
 

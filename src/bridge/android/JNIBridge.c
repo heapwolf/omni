@@ -72,6 +72,8 @@ static void omni_jni_start_main_pump(JNIEnv *env) {
 void omni_jni_init(JNIEnv *env, jobject activity) {
     // Cache the JVM and a global ref to the MainActivity.
     (*env)->GetJavaVM(env, &global_jvm);
+    // Again for an activity Android recreated: the old one is gone.
+    if (global_activity) (*env)->DeleteGlobalRef(env, global_activity);
     global_activity = (*env)->NewGlobalRef(env, activity);
     // Start the main-queue pump; see below.
     omni_jni_start_main_pump(env);
@@ -265,6 +267,15 @@ void omni_jni_add_view(JNIEnv *env, jobject parent, jobject child) {
 
 // Detaches a view. A single-child container throws when a replacement is
 // added over the old one, so a dropped view has to leave its parent.
+void omni_jni_set_dark_scheme(JNIEnv *env, int dark) {
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
+    if (!bridgeClass) { omni_jni_clear_pending(env); return; }
+    jmethodID method = (*env)->GetStaticMethodID(env, bridgeClass, "setDarkScheme", "(Z)V");
+    if (method) (*env)->CallStaticVoidMethod(env, bridgeClass, method, (jboolean)(dark != 0));
+    else omni_jni_clear_pending(env);
+    (*env)->DeleteLocalRef(env, bridgeClass);
+}
+
 void omni_jni_remove_view(JNIEnv *env, jobject child) {
     jclass viewClass = (*env)->FindClass(env, "android/view/View");
     jmethodID getParent = omni_jni_lookup(env, viewClass, "getParent", "()Landroid/view/ViewParent;");
@@ -453,11 +464,20 @@ void omni_jni_set_padding(JNIEnv *env, jobject view, int left, int top, int righ
                   omni_jni_px(env, right), omni_jni_px(env, bottom));
 }
 
-void omni_jni_set_shadow(JNIEnv *env, jobject container, float radius) {
+void omni_jni_set_shadow(JNIEnv *env, jobject container, float radius, int argb) {
     jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     if (!bridgeClass) return;
-    jmethodID method = (*env)->GetStaticMethodID(env, bridgeClass, "setShadow", "(Landroid/view/View;F)V");
-    if (method) (*env)->CallStaticVoidMethod(env, bridgeClass, method, container, omni_jni_pxf(env, radius));
+    jmethodID method = (*env)->GetStaticMethodID(env, bridgeClass, "setShadow", "(Landroid/view/View;FI)V");
+    if (method) (*env)->CallStaticVoidMethod(env, bridgeClass, method, container, omni_jni_pxf(env, radius), (jint)argb);
+    omni_jni_clear_pending(env);
+    (*env)->DeleteLocalRef(env, bridgeClass);
+}
+
+void omni_jni_set_glass_shadow(JNIEnv *env, jobject view, float elevation) {
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
+    if (!bridgeClass) return;
+    jmethodID method = (*env)->GetStaticMethodID(env, bridgeClass, "setGlassShadow", "(Landroid/view/View;F)V");
+    if (method) (*env)->CallStaticVoidMethod(env, bridgeClass, method, view, omni_jni_pxf(env, elevation));
     omni_jni_clear_pending(env);
     (*env)->DeleteLocalRef(env, bridgeClass);
 }
@@ -467,6 +487,24 @@ void omni_jni_set_image_scale(JNIEnv *env, jobject view, int fill) {
     if (!bridgeClass) return;
     jmethodID method = (*env)->GetStaticMethodID(env, bridgeClass, "setImageScale", "(Landroid/widget/ImageView;Z)V");
     if (method) (*env)->CallStaticVoidMethod(env, bridgeClass, method, view, (jboolean)(fill != 0));
+    omni_jni_clear_pending(env);
+    (*env)->DeleteLocalRef(env, bridgeClass);
+}
+
+void omni_jni_attach_focus_change(JNIEnv *env, jobject view, void* swift_ptr) {
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
+    if (!bridgeClass) return;
+    jmethodID m = (*env)->GetStaticMethodID(env, bridgeClass, "attachFocusChange", "(Landroid/view/View;J)V");
+    if (m) (*env)->CallStaticVoidMethod(env, bridgeClass, m, view, (jlong)swift_ptr);
+    omni_jni_clear_pending(env);
+    (*env)->DeleteLocalRef(env, bridgeClass);
+}
+
+void omni_jni_focus_field(JNIEnv *env, jobject view, int focus) {
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
+    if (!bridgeClass) return;
+    jmethodID m = (*env)->GetStaticMethodID(env, bridgeClass, "focusField", "(Landroid/view/View;Z)V");
+    if (m) (*env)->CallStaticVoidMethod(env, bridgeClass, m, view, (jboolean)(focus != 0));
     omni_jni_clear_pending(env);
     (*env)->DeleteLocalRef(env, bridgeClass);
 }
@@ -582,8 +620,11 @@ void omni_jni_set_typeface(JNIEnv *env, jobject view, const char* family,
 }
 
 void omni_jni_set_text_size(JNIEnv *env, jobject view, float size) {
-    // setTextSize(float) defaults to SP (scaled pixels)
-    omni_jni_call(env, view, "setTextSize", "(F)V", size);
+    // In dp (TypedValue.COMPLEX_UNIT_DIP), the points everything else is laid out in,
+    // as iOS draws a font's size. The one-argument setTextSize is in sp, which the
+    // system's font size scales: above the default, every label outgrew the layout
+    // made for it, and titles wrapped a word short.
+    omni_jni_call(env, view, "setTextSize", "(IF)V", 1, size);
 }
 
 // setLineSpacing takes extra pixels; setLetterSpacing takes ems, so tracking
@@ -1097,6 +1138,17 @@ int omni_jni_linear_orientation(JNIEnv *env, jobject view) {
     return orientation;
 }
 
+int omni_jni_parent_orientation(JNIEnv *env, jobject view) {
+    jclass viewClass = (*env)->FindClass(env, "android/view/View");
+    jmethodID getParent = viewClass ? omni_jni_lookup(env, viewClass, "getParent", "()Landroid/view/ViewParent;") : NULL;
+    jobject parent = getParent ? (*env)->CallObjectMethod(env, view, getParent) : NULL;
+    omni_jni_clear_pending(env);
+    int orientation = parent ? omni_jni_linear_orientation(env, parent) : -1;
+    if (parent) (*env)->DeleteLocalRef(env, parent);
+    if (viewClass) (*env)->DeleteLocalRef(env, viewClass);
+    return orientation;
+}
+
 void omni_jni_set_stack_child(JNIEnv *env, jobject child, int vertical,
                               int fillsCrossAxis, float weight) {
     jobject params; jclass paramsClass; jfieldID width, height; jmethodID setter;
@@ -1317,6 +1369,16 @@ jobject omni_jni_present_sheet(JNIEnv *env, jobject content, void* swift_ptr,
     jobject global = (*env)->NewGlobalRef(env, dialog);
     (*env)->DeleteLocalRef(env, dialog);
     return global;
+}
+
+void omni_jni_set_sheet_content(JNIEnv *env, jobject dialog, jobject content) {
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
+    if (!bridgeClass) return;
+    jmethodID m = (*env)->GetStaticMethodID(env, bridgeClass, "setSheetContent",
+        "(Landroid/app/Dialog;Landroid/view/View;)V");
+    if (m) (*env)->CallStaticVoidMethod(env, bridgeClass, m, dialog, content);
+    omni_jni_clear_pending(env);
+    (*env)->DeleteLocalRef(env, bridgeClass);
 }
 
 // See OmniEventBridge.presentAlert. message may be NULL. swift_ptr is an
@@ -2006,6 +2068,23 @@ JNIEXPORT void JNICALL Java_com_omni_OmniEventBridge_dispatchLifecycle(JNIEnv *e
 
 JNIEXPORT void JNICALL Java_com_omni_OmniEventBridge_dispatchActivity(JNIEnv *env, jclass clazz) {
     omni_swift_user_activity();
+}
+
+extern void omni_swift_appearance_changed(void);
+
+JNIEXPORT void JNICALL Java_com_omni_OmniEventBridge_dispatchAppearance(JNIEnv *env, jclass clazz) {
+    omni_swift_appearance_changed();
+}
+
+int omni_jni_is_night_mode(JNIEnv *env) {
+    if (!global_activity) return 0;
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
+    if (!bridgeClass) return 0;
+    jmethodID m = (*env)->GetStaticMethodID(env, bridgeClass, "isNightMode", "(Landroid/content/Context;)Z");
+    jboolean night = m ? (*env)->CallStaticBooleanMethod(env, bridgeClass, m, global_activity) : JNI_FALSE;
+    omni_jni_clear_pending(env);
+    (*env)->DeleteLocalRef(env, bridgeClass);
+    return night ? 1 : 0;
 }
 
 extern void omni_swift_safe_area(float top, float bottom);

@@ -28,6 +28,7 @@ extension SecureField {
     }
 
     @MainActor public func updateNative(_ view: NativeView) {
+        OmniAndroid.syncFocus(view, focusBinding)
         let binding = text
         syncTextField(view, to: binding.wrappedValue, handlers: &secureFieldHandlerRegistry) { newText in
             binding.wrappedValue = newText

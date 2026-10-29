@@ -39,6 +39,8 @@ void omni_jni_animate_replacement(JNIEnv *env, jobject scene_root, jobject paren
                                   float out_x, float out_y, int out_fade);
 void omni_jni_set_layout_params(JNIEnv *env, jobject view, int width, int height);
 void omni_jni_set_linear_layout_params(JNIEnv *env, jobject view, int width, int height, float weight);
+/// The orientation of the stack holding `view` (0 across, 1 down), or -1 if it isn't in one.
+int omni_jni_parent_orientation(JNIEnv *env, jobject view);
 void omni_jni_set_stack_child(JNIEnv *env, jobject child, int vertical, int fillsCrossAxis, float weight);
 /// A weighted stack child measured at its content's size along the stack, the
 /// surplus shared on top, rather than from zero.
@@ -48,6 +50,8 @@ void omni_jni_resolve_child_size(JNIEnv *env, jobject child, int fillsWidth, int
 void omni_jni_set_spacer_extent(JNIEnv *env, jobject view, int vertical);
 void omni_jni_dump_view_tree(JNIEnv *env, jobject root);
 void omni_jni_install_root(JNIEnv *env, jobject activity, jobject root);
+/// The app's scheme, for the strips behind the system bars (RootHost).
+void omni_jni_set_dark_scheme(JNIEnv *env, int dark);
 
 void omni_jni_set_text_color(JNIEnv *env, jobject view, int a, int r, int g, int b);
 void omni_jni_set_text_spacing(JNIEnv *env, jobject view, float linePoints, float letterEm);
@@ -59,10 +63,17 @@ void omni_jni_set_padding(JNIEnv *env, jobject view, int left, int top, int righ
 void omni_jni_set_alpha(JNIEnv *env, jobject view, float alpha);
 /// .offset (points) and .scaleEffect, drawn without moving the layout, as on iOS.
 void omni_jni_set_transform(JNIEnv *env, jobject view, float x, float y, float scale);
+/// A field's focus changes, to an EventHandlerBool; and focus given or taken from Swift.
+void omni_jni_attach_focus_change(JNIEnv *env, jobject view, void* swift_ptr);
+void omni_jni_focus_field(JNIEnv *env, jobject view, int focus);
+/// 1 when the system is in dark mode.
+int omni_jni_is_night_mode(JNIEnv *env);
 /// Image's content mode: 1 crops to fill the view, 0 fits it whole.
 void omni_jni_set_image_scale(JNIEnv *env, jobject view, int fill);
 /// .shadow: elevation (points) on the container's content, the container left flat.
-void omni_jni_set_shadow(JNIEnv *env, jobject container, float radius);
+void omni_jni_set_shadow(JNIEnv *env, jobject container, float radius, int argb);
+/// Glass's faint drop shadow, as iOS's glass draws one.
+void omni_jni_set_glass_shadow(JNIEnv *env, jobject view, float elevation);
 void omni_jni_set_elevation(JNIEnv *env, jobject view, float elevation);
 void omni_jni_set_text_size(JNIEnv *env, jobject view, float size);
 void omni_jni_set_monospace(JNIEnv *env, jobject view, int isMonospaced);
@@ -119,6 +130,8 @@ void omni_jni_attach_on_scroll_change(JNIEnv *env, jobject view, void* swift_ptr
 jobject omni_jni_present_sheet(JNIEnv *env, jobject content, void* swift_ptr,
                                float fraction, float height_dp, float corner_radius_dp,
                                int shows_indicator, int is_dismissable, int surface_argb);
+/// The sheet shows `content` in place of what it held (its root's native changed).
+void omni_jni_set_sheet_content(JNIEnv *env, jobject dialog, jobject content);
 jobject omni_jni_present_alert(JNIEnv *env, jobject anchor, const char* title, const char* message,
                                const char* titles, const char* roles, void* swift_ptr);
 void omni_jni_dismiss_dialog(JNIEnv *env, jobject dialog);

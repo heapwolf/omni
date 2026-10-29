@@ -1261,11 +1261,11 @@ public struct AndroidBuilder {
                          android:extractNativeLibs="true"
                          android:debuggable="true"
                          android:usesCleartextTraffic="true"\(iconAttr)>
-                <!-- configChanges: rotating, resizing or a keyboard coming and going
+                <!-- configChanges: rotating, resizing, a keyboard coming and going, or dark mode
                      keeps the activity. Recreating it would start the engine
                      again; omni lays the root out at the new size instead. -->
                 <activity android:name="\(packageName(for: product)).MainActivity" android:exported="true"
-                          android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation"\(launchMode())>
+                          android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode"\(launchMode())>
                     <intent-filter>
                         <action android:name="android.intent.action.MAIN" />
                         <category android:name="android.intent.category.LAUNCHER" />
@@ -1335,10 +1335,6 @@ public struct AndroidBuilder {
                 if (action == android.view.MotionEvent.ACTION_DOWN
                         || action == android.view.MotionEvent.ACTION_POINTER_DOWN) {
                     com.omni.OmniEventBridge.dispatchActivity();
-                }
-                // A third finger down logs the view tree (debug builds; see dumpTree).
-                if (action == android.view.MotionEvent.ACTION_POINTER_DOWN && event.getPointerCount() == 3) {
-                    com.omni.OmniEventBridge.dumpTree(getWindow().getDecorView());
                 }
                 return super.dispatchTouchEvent(event);
             }

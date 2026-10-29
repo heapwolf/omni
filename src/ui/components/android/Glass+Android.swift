@@ -63,6 +63,10 @@ extension EffectBackgroundView {
         if case .glass(let glass) = kind { isIdentity = glass.variant == .identity } else { isIdentity = false }
         omni_jni_set_glass(OmniAndroid.env, view, Self.argb(fill), isIdentity ? 0 : Self.argb(stroke),
                            Float(shape.radius), shape.isCircular ? 1 : 0)
+        // The faint shadow iOS's regular glass casts (under a tab bar).
+        if case .glass(let glass) = kind, glass.variant == .regular {
+            omni_jni_set_glass_shadow(OmniAndroid.env, view, 6)
+        }
     }
 
     static func argb(_ color: Color) -> Int32 {

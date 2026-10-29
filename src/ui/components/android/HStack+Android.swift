@@ -5,12 +5,8 @@ import CAndroid
 extension HStack {
     @MainActor public func makeNative() -> NativeView {
         let env = OmniAndroid.env
-        let view = OmniAndroid.createView(env, "android/widget/LinearLayout")
-
-        // 0 = HORIZONTAL. Set once during creation to avoid JNI overhead during updates.
-        omni_jni_call_void_method_int(env, view, "setOrientation", 0)
-
-        return view
+        // Horizontal, and fits its children to the row (OmniEventBridge.OmniHStack).
+        return OmniAndroid.createView(env, "com/omni/OmniEventBridge$OmniHStack")
     }
 
     @MainActor public func updateNative(_ view: NativeView) {

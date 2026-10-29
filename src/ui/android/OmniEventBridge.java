@@ -113,6 +113,24 @@ public class OmniEventBridge {
     public static native void dispatchActivity();
     /// Engine.safeArea: the status bar's and the navigation bar's heights, in dp.
     public static native void dispatchSafeArea(float top, float bottom);
+    /// Appearance: the system's light or dark changed (MainActivity handles uiMode itself).
+    public static native void dispatchAppearance();
+
+    /// The system's dark mode, for Appearance when the app follows the system.
+    /// The app's scheme (Appearance.current), which may differ from the system's.
+    static boolean darkScheme;
+
+    public static void setDarkScheme(boolean dark) {
+        if (dark == darkScheme) return;
+        darkScheme = dark;
+        if (rootHost != null) rootHost.requestLayout();
+    }
+
+    public static boolean isNightMode(Context context) {
+        int mode = context.getResources().getConfiguration().uiMode
+            & android.content.res.Configuration.UI_MODE_NIGHT_MASK;
+        return mode == android.content.res.Configuration.UI_MODE_NIGHT_YES;
+    }
 
     /// Keyboard.dismiss: the keyboard goes, and the focused field loses focus.
     public static void dismissKeyboard() {
@@ -218,6 +236,52 @@ public class OmniEventBridge {
         WATCHERS.put(view, watcher);
     }
 
+    /// A field's focus, told to Swift as it comes and goes (its .focused binding).
+    public static void attachFocusChange(View view, long ptr) {
+        view.setOnFocusChangeListener((v, hasFocus) -> dispatchBool(ptr, hasFocus));
+    }
+
+    /// .focused set from Swift: the field takes focus and the keyboard, or gives both up.
+    public static void focusField(final View view, boolean focus) {
+        android.view.inputmethod.InputMethodManager keyboard =
+            (android.view.inputmethod.InputMethodManager) view.getContext()
+                .getSystemService(Context.INPUT_METHOD_SERVICE);
+        if (focus) {
+            view.post(() -> {
+                view.requestFocus();
+                if (keyboard != null) keyboard.showSoftInput(view, 0);
+            });
+        } else if (view.hasFocus()) {
+            if (keyboard != null) keyboard.hideSoftInputFromWindow(view.getWindowToken(), 0);
+            view.clearFocus();
+        }
+    }
+
+    /// A finger down outside the focused field gives up its focus and the keyboard, as
+    /// a tap away does on iOS. Not for a touch on another field, which takes the focus.
+    static void blurOnTouchOutside(View root, MotionEvent e) {
+        if (e.getActionMasked() != MotionEvent.ACTION_DOWN) return;
+        View focused = root.findFocus();
+        if (!(focused instanceof EditText)) return;
+        android.graphics.Rect bounds = new android.graphics.Rect();
+        focused.getGlobalVisibleRect(bounds);
+        int x = (int) e.getRawX(), y = (int) e.getRawY();
+        if (bounds.contains(x, y) || fieldAt(root, x, y)) return;
+        focusField(focused, false);
+    }
+
+    private static boolean fieldAt(View view, int x, int y) {
+        if (view.getVisibility() != View.VISIBLE) return false;
+        android.graphics.Rect bounds = new android.graphics.Rect();
+        if (!view.getGlobalVisibleRect(bounds) || !bounds.contains(x, y)) return false;
+        if (view instanceof EditText) return true;
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) if (fieldAt(group.getChildAt(i), x, y)) return true;
+        }
+        return false;
+    }
+
     /// A field leaving the screen: no more text reaches Swift, and if it had the
     /// keyboard, the keyboard goes. Otherwise it stays up, bound to a view that
     /// is gone, with that view's keyboard type.
@@ -298,6 +362,45 @@ public class OmniEventBridge {
             setClipToOutline(true);
         }
 
+        /// The content's own background, found down its first views, for the strip under
+        /// the navigation bar: the sheet's default colour there made a band of another shade
+        /// below a screen that paints its own.
+        private static Integer backgroundOf(View view, int depth) {
+            if (view == null || depth > 12) return null;
+            android.graphics.drawable.Drawable drawable = view.getBackground();
+            if (drawable instanceof android.graphics.drawable.ColorDrawable) {
+                int color = ((android.graphics.drawable.ColorDrawable) drawable).getColor();
+                if (Color.alpha(color) == 255) return color;
+            } else if (drawable instanceof GradientDrawable && ((GradientDrawable) drawable).getColor() != null) {
+                int color = ((GradientDrawable) drawable).getColor().getDefaultColor();
+                if (Color.alpha(color) == 255) return color;
+            }
+            if (view instanceof ViewGroup && ((ViewGroup) view).getChildCount() > 0) {
+                return backgroundOf(((ViewGroup) view).getChildAt(0), depth + 1);
+            }
+            return null;
+        }
+
+        /// Debug builds: the sheet's tree too, a second after it settles (its window isn't the root's).
+        private final Runnable settledDump = () -> {
+            android.util.Log.i("OmniLayout", "sheet:");
+            dumpTree(this);
+        };
+
+        @Override protected void onLayout(boolean changed, int l, int t, int r, int b) {
+            super.onLayout(changed, l, t, r, b);
+            removeCallbacks(settledDump);
+            postDelayed(settledDump, 1000);
+            Integer color = getChildCount() > 0 ? backgroundOf(getChildAt(0), 0) : null;
+            if (color != null) {
+                android.graphics.drawable.Drawable mine = getBackground();
+                if (!(mine instanceof android.graphics.drawable.ColorDrawable)
+                        || ((android.graphics.drawable.ColorDrawable) mine).getColor() != color) {
+                    setBackgroundColor(color);
+                }
+            }
+        }
+
         /// Whether something under (x, y) would scroll up, so the drag is its.
         private static boolean scrollsUp(View view, float x, float y) {
             if (x < view.getLeft() || x >= view.getRight() || y < view.getTop() || y >= view.getBottom()) return false;
@@ -323,6 +426,11 @@ public class OmniEventBridge {
                 tracker.addMovement(raw);
                 raw.recycle();
             }
+        }
+
+        @Override public boolean dispatchTouchEvent(MotionEvent e) {
+            blurOnTouchOutside(this, e);
+            return super.dispatchTouchEvent(e);
         }
 
         @Override public boolean onInterceptTouchEvent(MotionEvent e) {
@@ -383,9 +491,36 @@ public class OmniEventBridge {
         }
     }
 
+    /// A sheet's content replaced by `content`: its root's native changed (a screen
+    /// pushed inside it). Without this the sheet kept the old view, detached, and
+    /// showed nothing. The grab indicator stays on top.
+    public static void setSheetContent(Dialog dialog, View content) {
+        if (dialog == null || dialog.getWindow() == null) return;
+        SheetHost host = findSheetHost(dialog.getWindow().getDecorView());
+        if (host == null || (host.getChildCount() > 0 && host.getChildAt(0) == content)) return;
+        Log.i("OmniLayout", "sheet content replaced");
+        if (content.getParent() instanceof ViewGroup) ((ViewGroup) content.getParent()).removeView(content);
+        if (host.getChildCount() > 0) host.removeViewAt(0);
+        host.addView(content, 0, new android.widget.FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+    }
+
+    private static SheetHost findSheetHost(View view) {
+        if (view instanceof SheetHost) return (SheetHost) view;
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                SheetHost found = findSheetHost(group.getChildAt(i));
+                if (found != null) return found;
+            }
+        }
+        return null;
+    }
+
     public static Dialog presentSheet(View content, long onDismissPtr, float fraction,
                                       float heightDp, float cornerRadiusDp,
                                       boolean showsIndicator, boolean isDismissable, int surfaceColor) {
+        Log.i("OmniLayout", "sheet presented");
         Context ctx = content.getContext();
         float density = ctx.getResources().getDisplayMetrics().density;
         int screen = ctx.getResources().getDisplayMetrics().heightPixels;
@@ -399,6 +534,19 @@ public class OmniEventBridge {
         host.setBackgroundColor(surfaceColor);
         host.dialog = dialog;
         host.isDismissable = isDismissable;
+        // Clear of the navigation bar, and of the keyboard when it's up: the dialog's
+        // window is edge to edge, so the sheet's last row (a keypad's 0) was under the bar.
+        host.setOnApplyWindowInsetsListener((v, insets) -> {
+            int bottom;
+            if (android.os.Build.VERSION.SDK_INT >= 30) {
+                bottom = insets.getInsets(android.view.WindowInsets.Type.systemBars()
+                    | android.view.WindowInsets.Type.ime()).bottom;
+            } else {
+                bottom = insets.getSystemWindowInsetBottom();
+            }
+            v.setPadding(0, 0, 0, bottom);
+            return insets;
+        });
         host.addView(content, new android.widget.FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
@@ -426,6 +574,22 @@ public class OmniEventBridge {
                 ? Math.round(heightDp * density)
                 : Math.round(screen * Math.min(fraction, 0.94f));
             window.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(Color.TRANSPARENT));
+            // Down behind the navigation bar, as iOS's sheet goes under the home indicator:
+            // fitted to the bars, the sheet stopped above it and the screen showed in a gap.
+            // Its host pads its content clear of the bar (the insets listener above).
+            if (android.os.Build.VERSION.SDK_INT >= 30) {
+                window.setDecorFitsSystemWindows(false);
+                // The window itself, not only its content: a dialog's is placed clear of the
+                // bars unless it fits none of them.
+                android.view.WindowManager.LayoutParams attrs = window.getAttributes();
+                attrs.setFitInsetsTypes(0);
+                window.setAttributes(attrs);
+            } else {
+                window.addFlags(android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS);
+            }
+            window.addFlags(android.view.WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
+            window.setNavigationBarColor(Color.TRANSPARENT);
+            if (android.os.Build.VERSION.SDK_INT >= 29) window.setNavigationBarContrastEnforced(false);
             window.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, Math.min(height, screen));
             window.setGravity(Gravity.BOTTOM);
             window.setWindowAnimations(android.R.style.Animation_InputMethod);
@@ -494,6 +658,7 @@ public class OmniEventBridge {
     }
 
     public static void dismissDialog(Dialog dialog) {
+        Log.i("OmniLayout", "dialog dismissed");
         if (dialog != null && dialog.isShowing()) {
             dialog.dismiss();
         }
@@ -597,6 +762,11 @@ public class OmniEventBridge {
 
         void scroll(int page, boolean animated) {
             int to = page * length();
+            // Content not yet as long as the page needs (its pages unsized on the first layout): the
+            // scroll would clamp short of it, so it waits for a layout where it reaches.
+            View content = view.getChildCount() > 0 ? view.getChildAt(0) : null;
+            int extent = content == null ? 0 : horizontal ? content.getWidth() : content.getHeight();
+            if (page > 0 && extent < to + length()) { pending = page; return; }
             int x = horizontal ? to : 0, y = horizontal ? 0 : to;
             if (!animated) { view.scrollTo(x, y); return; }
             if (horizontal) ((HorizontalScrollView) view).smoothScrollTo(x, y);
@@ -1142,21 +1312,107 @@ public class OmniEventBridge {
     /// container stays flat, in its place among them; the content's own outline
     /// (a circle, a rounded card) shapes the shadow, which spills past the
     /// container and its parent as on iOS. Posted: the content isn't inserted yet.
-    public static void setShadow(final View container, final float elevation) {
+    public static void setShadow(final View container, final float elevation, final int color) {
         container.setElevation(0);
         container.post(() -> {
             if (!(container instanceof ViewGroup) || ((ViewGroup) container).getChildCount() == 0) return;
-            ViewGroup group = (ViewGroup) container;
-            group.getChildAt(0).setElevation(elevation);
-            group.setClipChildren(false);
-            if (group.getParent() instanceof ViewGroup) ((ViewGroup) group.getParent()).setClipChildren(false);
+            // Down the first children to the one with a shape: Android shadows an outline,
+            // and the wrappers sizing the content (a frame) have none, so nothing was drawn.
+            View content = ((ViewGroup) container).getChildAt(0), shaped = content;
+            while (shaped != null && !hasOutline(shaped)) {
+                shaped = shaped instanceof ViewGroup && ((ViewGroup) shaped).getChildCount() > 0
+                    ? ((ViewGroup) shaped).getChildAt(0) : null;
+            }
+            lift(shaped != null ? shaped : content, Color.alpha(color) == 0 ? 0 : elevation, color, container);
         });
+    }
+
+    /// A drop shadow of `elevation` on `view`, its colour where the platform allows, and
+    /// nothing up to the nearest scroll view clipping it off: it spills past them, as on
+    /// iOS. Stopped a level above, the rows around it cut the shadow off in straight lines.
+    static void lift(View view, float elevation, int color, View above) {
+        view.setElevation(elevation);
+        if (android.os.Build.VERSION.SDK_INT >= 28 && Color.alpha(color) != 0) {
+            int opaque = color | 0xff000000;
+            view.setOutlineAmbientShadowColor(opaque);
+            view.setOutlineSpotShadowColor(opaque);
+        }
+        for (android.view.ViewParent p = view.getParent(); p instanceof ViewGroup
+                && !(p instanceof HorizontalScrollView) && !(p instanceof ScrollView); p = p.getParent()) {
+            ViewGroup group = (ViewGroup) p;
+            group.setClipChildren(false);
+            group.setClipToPadding(false);
+            // A view drawn through a layer (an opacity) clips to its bounds whatever the above.
+            group.forceHasOverlappingRendering(false);
+        }
+    }
+
+    /// Whether Android has an outline to shadow: a background (a fill, a glass), or a clip's shape.
+    private static boolean hasOutline(View view) {
+        return view.getBackground() != null || view.getClipToOutline();
     }
 
     /// Image's .scaledToFill (crop to fill the view) or .scaledToFit (whole, centred).
     public static void setImageScale(ImageView view, boolean fill) {
         view.setScaleType(fill ? ImageView.ScaleType.CENTER_CROP : ImageView.ScaleType.FIT_CENTER);
         view.setAdjustViewBounds(false);
+    }
+
+    /// Spacer. Measured, it asks for no more than its minimum unless told an exact
+    /// size, as SwiftUI's ideal size is its minLength: a plain View takes all it's
+    /// offered, so in a wrapper sized to its content (a keypad's empty corner key)
+    /// it took the whole row from the keys beside it. A stack's weight still gives
+    /// it the surplus, measured exactly.
+    public static class OmniSpacer extends View {
+        public OmniSpacer(Context context) { super(context); }
+
+        @Override protected void onMeasure(int widthSpec, int heightSpec) {
+            setMeasuredDimension(size(widthSpec, getSuggestedMinimumWidth()),
+                                 size(heightSpec, getSuggestedMinimumHeight()));
+        }
+
+        private static int size(int spec, int minimum) {
+            return MeasureSpec.getMode(spec) == MeasureSpec.EXACTLY ? MeasureSpec.getSize(spec) : minimum;
+        }
+    }
+
+    /// An HStack. A LinearLayout gives each child what it asks, in order, so a long
+    /// text took the whole row and pushed what follows (a row's chevron) past its
+    /// edge. As on iOS, the row fits: the widest child sized by its content gives
+    /// up the overflow, and its text wraps or truncates.
+    public static class OmniHStack extends LinearLayout {
+        public OmniHStack(Context context) { super(context); setOrientation(HORIZONTAL); }
+
+        @Override protected void onMeasure(int widthSpec, int heightSpec) {
+            super.onMeasure(widthSpec, heightSpec);
+            if (MeasureSpec.getMode(widthSpec) == MeasureSpec.UNSPECIFIED) return;
+            int available = MeasureSpec.getSize(widthSpec) - getPaddingLeft() - getPaddingRight();
+            int used = 0, shown = 0;
+            View widest = null;
+            for (int i = 0; i < getChildCount(); i++) {
+                View child = getChildAt(i);
+                if (child.getVisibility() == GONE) continue;
+                LayoutParams lp = (LayoutParams) child.getLayoutParams();
+                used += child.getMeasuredWidth() + lp.leftMargin + lp.rightMargin;
+                shown++;
+                if (child instanceof OmniSpacer || lp.width != LayoutParams.WRAP_CONTENT) continue;
+                if (widest == null || child.getMeasuredWidth() > widest.getMeasuredWidth()) widest = child;
+            }
+            // The stack's spacing is a divider of that width (setLinearLayoutSpacing).
+            android.graphics.drawable.Drawable divider = getDividerDrawable();
+            if (divider != null && (getShowDividers() & SHOW_DIVIDER_MIDDLE) != 0 && shown > 1)
+                used += divider.getIntrinsicWidth() * (shown - 1);
+            int overflow = used - available;
+            if (overflow <= 0 || widest == null) return;
+            // Measured again with that child held to what's left; its own params are put back after.
+            LayoutParams lp = (LayoutParams) widest.getLayoutParams();
+            float weight = lp.weight;
+            lp.width = Math.max(0, widest.getMeasuredWidth() - overflow);
+            lp.weight = 0;
+            super.onMeasure(widthSpec, heightSpec);
+            lp.width = LayoutParams.WRAP_CONTENT;
+            lp.weight = weight;
+        }
     }
 
     /// A .foregroundColor: symbols, and text (labels and fields), as on iOS.
@@ -1372,6 +1628,14 @@ public class OmniEventBridge {
 
     public static void installRoot(Activity activity, View content) {
         hostActivity = activity;
+        // A new activity for the same process (Android recreated it in the background):
+        // the old host went with the old window, and the new one showed nothing. The
+        // app's views move to a new host in the new window.
+        if (rootHost != null && rootHost.getContext() != activity) {
+            rootHost.removeAllViews();
+            rootHost = null;
+            rootContent = null;
+        }
         if (rootHost != null) {
             if (content == rootContent) return;
             ViewGroup parent = (ViewGroup) content.getParent();
@@ -1385,6 +1649,11 @@ public class OmniEventBridge {
         }
 
         android.view.Window window = activity.getWindow();
+        // The bars' colours are the window's only with this flag, and without the translucent
+        // ones; else the theme's stayed (DeviceDefault.Light's: a white navigation bar).
+        window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_TRANSLUCENT_STATUS
+            | android.view.WindowManager.LayoutParams.FLAG_TRANSLUCENT_NAVIGATION);
+        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
         window.setStatusBarColor(Color.TRANSPARENT);
         window.setNavigationBarColor(Color.TRANSPARENT);
         if (android.os.Build.VERSION.SDK_INT >= 29) {
@@ -1429,13 +1698,25 @@ public class OmniEventBridge {
             return insets;
         });
         activity.setContentView(host);
+        // Again after setContentView: installing the decor reads the theme's contrast
+        // setting, which undid the one above, and a white scrim stayed behind the
+        // navigation bar's buttons.
+        if (android.os.Build.VERSION.SDK_INT >= 29) {
+            window.setStatusBarContrastEnforced(false);
+            window.setNavigationBarContrastEnforced(false);
+        }
         rootHost = host;
         rootContent = content;
         contentView = host;
         host.requestApplyInsets();
         // One listener for the window's life, reading whatever the host shows now.
+        // Debug builds log the tree a second after each layout settles, so a screen that
+        // looks wrong can be read from logcat (OmniLayout) without a gesture.
+        final Runnable settledDump = () -> dumpTree(host);
         host.getViewTreeObserver().addOnGlobalLayoutListener(() -> {
             if (rootContent != null) host.refresh(activity, rootContent);
+            host.removeCallbacks(settledDump);
+            host.postDelayed(settledDump, 1000);
         });
     }
 
@@ -1452,12 +1733,31 @@ public class OmniEventBridge {
             setClipChildren(false);
         }
 
+        /// Dark mode switched in the system's settings: the app re-renders in it if it
+        /// follows the system. Reached because the manifest takes uiMode changes itself.
+        @Override protected void onConfigurationChanged(android.content.res.Configuration config) {
+            super.onConfigurationChanged(config);
+            dispatchAppearance();
+        }
+
+        /// A third finger down logs the view tree (debug builds; see dumpTree).
+        @Override public boolean dispatchTouchEvent(MotionEvent e) {
+            blurOnTouchOutside(this, e);
+            if (e.getActionMasked() == MotionEvent.ACTION_POINTER_DOWN && e.getPointerCount() == 3) {
+                dumpTree(this);
+            }
+            return super.dispatchTouchEvent(e);
+        }
+
         void refresh(Activity activity, View content) {
             if (content.getWidth() == 0 || content.getHeight() == 0) return;
             int top = colorAt(content, content.getWidth() / 2, 0);
             int bottom = colorAt(content, content.getWidth() / 2, content.getHeight() - 1);
-            if (top == 0) top = Color.WHITE;
-            if (bottom == 0) bottom = Color.WHITE;
+            // Nothing opaque at that edge: the scheme's background, not always white,
+            // which put a white strip behind the navigation bar in dark mode.
+            int fallback = darkScheme ? Color.BLACK : Color.WHITE;
+            if (top == 0) top = fallback;
+            if (bottom == 0) bottom = fallback;
             if (top != topColor || bottom != bottomColor) {
                 topColor = top;
                 bottomColor = bottom;
@@ -1553,7 +1853,10 @@ public class OmniEventBridge {
     /// child there that has one, else the view's own. 0 for none.
     private static int colorAt(View view, int x, int y) {
         if (view.getVisibility() != View.VISIBLE) return 0;
-        if (view instanceof ViewGroup) {
+        // Not what scrolls past the edge (a light button scrolled under the tab bar
+        // turned the strip behind the navigation bar white): the screen behind it.
+        // A horizontal pager's pages are still looked into.
+        if (view instanceof ViewGroup && !(view instanceof ScrollView)) {
             ViewGroup group = (ViewGroup) view;
             for (int i = group.getChildCount() - 1; i >= 0; i--) {
                 View child = group.getChildAt(i);
@@ -1777,6 +2080,22 @@ public class OmniEventBridge {
         view.setClipToOutline(true);
     }
 
+    /// Glass's faint shadow, which iOS's glass draws itself (a tab bar's).
+    public static void setGlassShadow(final View view, final float elevation) {
+        // The background's shape, cast as if solid: a GradientDrawable that isn't opaque
+        // (glass is a translucent fill) gives its outline no alpha, and Android draws no
+        // shadow for it, however high it's lifted.
+        view.setOutlineProvider(new ViewOutlineProvider() {
+            @Override public void getOutline(View v, Outline outline) {
+                android.graphics.drawable.Drawable background = v.getBackground();
+                if (background != null) background.getOutline(outline);
+                else outline.setRect(0, 0, v.getWidth(), v.getHeight());
+                outline.setAlpha(1f);
+            }
+        });
+        view.post(() -> lift(view, elevation, 0, view));
+    }
+
     public static void setClipRadius(View view, float radius, boolean isCircular) {
         view.setClipToOutline(true);
         view.setOutlineProvider(new ViewOutlineProvider() {
@@ -1811,9 +2130,7 @@ public class OmniEventBridge {
                 Log.i("OmniLayout", "--- end ---");
             }
         };
-        // Once laid out and drawn: at the next post most views have no size yet,
-        // and a swipe's slide takes a moment to land.
-        root.postDelayed(dump, 900);
+        root.post(dump);
     }
 
     private static String describeSize(int value) {
@@ -1843,8 +2160,16 @@ public class OmniEventBridge {
         if (view.getTranslationX() != 0 || view.getTranslationY() != 0) {
             line.append(" moved=").append(view.getTranslationX()).append(',').append(view.getTranslationY());
         }
+        if (view.getPaddingLeft() != 0 || view.getPaddingTop() != 0 || view.getPaddingRight() != 0 || view.getPaddingBottom() != 0) {
+            line.append(" pad=").append(view.getPaddingLeft()).append(',').append(view.getPaddingTop())
+                .append(',').append(view.getPaddingRight()).append(',').append(view.getPaddingBottom());
+        }
         if (view.getScaleX() != 1 || view.getScaleY() != 1) line.append(" scale=").append(view.getScaleX());
         if (view.getAlpha() != 1) line.append(" alpha=").append(view.getAlpha());
+        if (view.getElevation() != 0) line.append(" elev=").append(view.getElevation())
+            .append(view.getOutlineProvider() == null ? " no-outline" : "");
+        if (view.getClipToOutline()) line.append(" clipOutline");
+        if (view instanceof ViewGroup && ((ViewGroup) view).getClipChildren()) line.append(" clips");
         if (view instanceof TextView) {
             CharSequence text = ((TextView) view).getText();
             if (text != null && text.length() > 0) {

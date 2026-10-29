@@ -18,6 +18,8 @@ import Foundation
 import AppKit
 #elseif os(iOS)
 import UIKit
+#elseif os(Android)
+import CAndroid
 #endif
 
 /// SwiftUI's ColorScheme.
@@ -55,6 +57,9 @@ public enum Appearance {
     /// The system's scheme changed, or a window was created.
     @MainActor static func refresh() {
         let next = preferred ?? system
+        #if os(Android)
+        omni_jni_set_dark_scheme(OmniAndroid.env, next == .dark ? 1 : 0)
+        #endif
         guard next != current else { return }
         current = next
         if let root = Engine.root { Engine.render(root) }
@@ -70,6 +75,8 @@ public enum Appearance {
         #elseif os(macOS)
         let match = NSApplication.shared.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua])
         return match == .darkAqua ? .dark : .light
+        #elseif os(Android)
+        return omni_jni_is_night_mode(OmniAndroid.env) != 0 ? .dark : .light
         #else
         return .light
         #endif
@@ -113,3 +120,11 @@ public extension View {
         return self
     }
 }
+
+#if os(Android)
+/// The system's light or dark changed; see OmniEventBridge.RootHost.
+@_cdecl("omni_swift_appearance_changed")
+public func omni_swift_appearance_changed() {
+    MainActor.assumeIsolated { Appearance.refresh() }
+}
+#endif

@@ -15,6 +15,7 @@ extension TextField {
 
     @MainActor public func unmountNative(_ view: NativeView) {
         omni_jni_detach_text_field(OmniAndroid.env, view)
+        OmniAndroid.forgetFocus(view)
         textFieldHandlerRegistry.removeValue(forKey: view)
     }
 
@@ -37,6 +38,9 @@ extension TextField {
             autocorrectionDisabled: configuration.resolvedAutocorrectionDisabled))
         omni_jni_call_void_method_int(env, view, "setImeOptions", Self.imeOptions(configuration.submitLabel))
         omni_jni_set_autofill_hint(env, view, configuration.contentType.map(Self.autofillHint) ?? "")
+        // The placeholder, as SecureField's: never set, a field showed nothing while empty.
+        omni_jni_call_void_method_string(env, view, "setHint", placeholder)
+        OmniAndroid.syncFocus(view, focusBinding)
     }
 
     /// androidx.autofill's HintConstants, by value: android.view.View's

@@ -42,16 +42,53 @@ public class EventHandlerString {
 }
 
 
+@MainActor private var focusStates: [UnsafeMutableRawPointer: FocusSync] = [:]
+
+@MainActor private final class FocusSync {
+    var binding: Binding<Bool>?
+    /// What the field was last given or told: so only a change to the binding moves focus.
+    var applied: Bool?
+    lazy var handler = EventHandlerBool { [unowned self] hasFocus in
+        self.applied = hasFocus
+        if self.binding?.wrappedValue != hasFocus { self.binding?.wrappedValue = hasFocus }
+    }
+}
+
 extension OmniAndroid {
+    /// No font padding: a TextView adds room above and below each line by default,
+    /// which iOS doesn't, so every label stood a few points taller than its font, and
+    /// a screen laid out to fit an iPhone (Convert, with its keypad) ran past the bottom.
+    @MainActor static func dropFontPadding(_ view: NativeView) {
+        omni_jni_call_void_method_bool(env, view, "setIncludeFontPadding", 0)
+    }
+
     /// A TextView's (or an EditText's) text colour.
     @MainActor static func setTextColor(_ view: NativeView, _ color: Color) {
         let c = color.rgbaComponents
         omni_jni_set_text_color(env, view, Int32(c.a * 255), Int32(c.r * 255), Int32(c.g * 255), Int32(c.b * 255))
     }
 
+    /// A field's .focused binding, both ways: Android's focus reported to it, and a change
+    /// to it applied, only when it changes (a render with it unchanged leaves focus be).
+    @MainActor static func syncFocus(_ view: NativeView, _ binding: Binding<Bool>?) {
+        let state = focusStates[view] ?? {
+            let state = FocusSync()
+            focusStates[view] = state
+            omni_jni_attach_focus_change(env, view, Unmanaged.passUnretained(state.handler).toOpaque())
+            return state
+        }()
+        state.binding = binding
+        guard let wanted = binding?.wrappedValue, wanted != state.applied else { return }
+        state.applied = wanted
+        omni_jni_focus_field(env, view, wanted ? 1 : 0)
+    }
+
+    @MainActor static func forgetFocus(_ view: NativeView) { focusStates.removeValue(forKey: view) }
+
     /// An EditText as a plain field, as on iOS: no underline, no inset of its
     /// own, and the scheme's text and hint colours until a .foregroundColor's.
     @MainActor static func makePlainField(_ view: NativeView) {
+        dropFontPadding(view)
         omni_jni_set_background_color(env, view, 0, 0, 0, 0)
         omni_jni_set_padding(env, view, 0, 0, 0, 0)
         setTextColor(view, .primaryText)

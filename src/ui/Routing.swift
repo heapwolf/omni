@@ -269,6 +269,8 @@ public struct SheetModifierView<SheetContent: View>: NativeComponent {
                 }
                 #elseif os(macOS)
                 state.sheetOverlay?.setContent(native)
+                #elseif os(Android)
+                if let dialog = state.sheetDialog { omni_jni_set_sheet_content(OmniAndroid.getEnv(), dialog, native) }
                 #endif
             }
             state.sheetNode = node
@@ -366,7 +368,8 @@ public struct SheetModifierView<SheetContent: View>: NativeComponent {
                     OmniAndroid.getEnv(), sheetNative,
                     Unmanaged.passRetained(dismissed).toOpaque(),
                     Float(detent.approximateFraction), heightDp,
-                    Float(options.cornerRadius ?? 10),
+                    // Unless one is given, the app's sheets' (the PIN sheet's 24).
+                    Float(options.cornerRadius ?? 24),
                     showsIndicator ? 1 : 0,
                     options.interactiveDismissDisabled == true ? 0 : 1,
                     // iOS's sheet colours, as the scheme has them, unless one is given.
@@ -382,6 +385,11 @@ public struct SheetModifierView<SheetContent: View>: NativeComponent {
                 #if os(macOS)
                 // A render that replaced the content's view: the sheet shows the new one.
                 if let native = node.native { state.sheetOverlay?.setContent(native) }
+                #endif
+                #if os(Android)
+                if let native = node.native, let dialog = state.sheetDialog {
+                    omni_jni_set_sheet_content(OmniAndroid.getEnv(), dialog, native)
+                }
                 #endif
                 #if os(iOS)
                 if let native = node.native, let host = state.sheetController?.view {
@@ -445,6 +453,14 @@ public struct SheetModifierView<SheetContent: View>: NativeComponent {
         state.isPresented = false
         state.sheetOverlay?.dismiss()
         state.sheetOverlay = nil
+        state.sheetNode?.unmount()
+        state.sheetNode = nil
+        #elseif os(Android)
+        guard let state = AndroidModifierState.get(SheetState.self, for: view),
+              state.isPresented else { return }
+        state.isPresented = false
+        if let dialog = state.sheetDialog { omni_jni_dismiss_dialog(OmniAndroid.getEnv(), dialog) }
+        state.sheetDialog = nil
         state.sheetNode?.unmount()
         state.sheetNode = nil
         #endif

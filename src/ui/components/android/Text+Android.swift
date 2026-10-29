@@ -13,6 +13,7 @@ extension Text {
         // iOS's .label: the theme's is always dark. Set once, here, as an
         // ancestor's .foregroundColor is set before this view's updates.
         OmniAndroid.setTextColor(view, .primaryText)
+        OmniAndroid.dropFontPadding(view)
         return view
     }
 

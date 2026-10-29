@@ -18,6 +18,7 @@ extension SystemButtonPrimitive {
         omni_jni_call_void_method_int(env, view, "setMinHeight", 0)
 
         OmniAndroid.setTextColor(view, .primaryText)
+        OmniAndroid.dropFontPadding(view)
 
         return view
     }

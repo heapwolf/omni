@@ -24,10 +24,14 @@ enum AndroidExpansion {
     /// After omni_jni_set_stack_child: a child that wants the surplus only because
     /// something inside it does (a stack holding a Spacer) keeps its content's size
     /// and takes its share on top, as SwiftUI sizes it. From zero, it got an equal
-    /// share whatever its content: a keypad above a Spacer lost its last rows, a
-    /// column of amounts was cut short. Spacers, scroll views and the like, which
-    /// claim it themselves, still take only the surplus.
+    /// share whatever its content: a column of amounts was cut short. Spacers,
+    /// scroll views and the like, which claim it themselves, still take only the
+    /// surplus.
     static func settle(_ child: NativeView, vertical isVertical: Bool) {
+        // Across a row only. Down a column, a stack holding Spacers (a screen's top
+        // half above its keypad) measures as all the height there is, not its
+        // content, and sized from that the screen ran past the window.
+        guard !isVertical else { return }
         let wantsAlong = (isVertical ? vertical : horizontal).contains(child)
         let ownsIt = (isVertical ? ownVertical : ownHorizontal).contains(child) || fillers.contains(child)
         guard wantsAlong, !ownsIt else { return }
@@ -76,11 +80,18 @@ enum AndroidExpansion {
     /// True if `parent` gained a claim.
     private static func absorb(from child: NativeView, into parent: NativeView) -> Bool {
         var gained = false
+        // Through a wrapper (a frame, a background), a child's own claim stays the
+        // wrapper's own: a key's .frame(maxWidth: .infinity) inside its .frame(height:)
+        // shares its row equally, as SwiftUI does. Only through a stack is it carried,
+        // the stack sized to its content first (settle).
+        let isWrapper = omni_jni_linear_orientation(OmniAndroid.env, parent) < 0
         if horizontal.contains(child) && !pinnedWidth.contains(parent) {
             gained = horizontal.insert(parent).inserted || gained
+            if isWrapper && ownHorizontal.contains(child) { ownHorizontal.insert(parent) }
         }
         if vertical.contains(child) && !pinnedHeight.contains(parent) {
             gained = vertical.insert(parent).inserted || gained
+            if isWrapper && ownVertical.contains(child) { ownVertical.insert(parent) }
         }
         return gained
     }

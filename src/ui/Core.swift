@@ -577,10 +577,19 @@ public struct EmptyView: OmniStructuralView {
         for node in nodes {
             var ancestor = node.parent
             var isInside = false
+            #if os(Android)
+            // Seen, so parents that run in a circle end the walk instead of hanging it.
+            var seen: Set<ObjectIdentifier> = [ObjectIdentifier(node)]
+            while let a = ancestor, !isInside, seen.insert(ObjectIdentifier(a)).inserted {
+                isInside = ids.contains(ObjectIdentifier(a))
+                ancestor = a.parent
+            }
+            #else
             while let a = ancestor, !isInside {
                 isInside = ids.contains(ObjectIdentifier(a))
                 ancestor = a.parent
             }
+            #endif
             if !isInside { render(node) }
         }
     }
@@ -613,7 +622,20 @@ public struct EmptyView: OmniStructuralView {
         // How the view now shown leaves, as it last rendered: read before the
         // render replaces it, and only when there is an animation to run.
         let removal = Transaction.currentAnimation == nil ? nil : AnyTransition.on(node)
+        // Its own render while another node renders (a state set by a callback that
+        // runs inside a render: a scroll view telling its offset as it's moved)
+        // happens as its parent would render it. renderBody makes whatever is
+        // rendering the node's parent, and that may be one of its own descendants:
+        // its parents then ran in a circle, and the next state change walked them
+        // for ever (Android hung after a sheet closed). Android only.
+        #if os(Android)
+        let rendering = Tracker.current
+        if isOwnRender, rendering != nil { Tracker.current = node.parent }
         renderBody(node)
+        Tracker.current = rendering
+        #else
+        renderBody(node)
+        #endif
         // The app's root has no parent to put a new native in its place: the
         // window does, through rootHost.
         if node === root, node.native != before { rootHost?(node.native) }
@@ -897,7 +919,7 @@ public struct EmptyView: OmniStructuralView {
                 // for a card flow, which rebuilt Cards back to its dashboard.
                 // Its native is taken out and put back in order below. Not
                 // for a navigation container, whose screens are replaced.
-                #if os(macOS) || os(iOS)
+                #if os(macOS) || os(iOS) || os(Android)
                 let keepsKids = !((nativeComp as? ZStack)?.isNavigationContainer ?? false)
                 #else
                 let keepsKids = false
@@ -919,6 +941,8 @@ public struct EmptyView: OmniStructuralView {
                         remaining.removeFirst(i + 1)
                         #if os(macOS) || os(iOS)
                         kept.native?.removeFromSuperview()
+                        #elseif os(Android)
+                        if let n = kept.native { omni_jni_remove_view(OmniAndroid.env, n) }
                         #endif
                         kept.adopt(cv)
                         next.append(kept)
