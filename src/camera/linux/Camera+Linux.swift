@@ -13,7 +13,7 @@ public struct LinuxCamera: CameraCapture {
     public func capture(_ options: CaptureOptions) async throws -> CapturedImage {
         throw CameraError.notImplemented(Self.reason)
     }
-    public func pickImage() async throws -> CapturedImage {
+    public func pickImage(_ options: CaptureOptions) async throws -> CapturedImage {
         throw CameraError.notImplemented(Self.reason)
     }
 }

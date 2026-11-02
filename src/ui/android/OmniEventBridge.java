@@ -1017,14 +1017,16 @@ public class OmniEventBridge {
 
     /// TransitionAnimator's counterpart: `arriving` has just replaced `leaving`
     /// in `parent`. The arriving view starts off by (inX, inY) of the parent's
-    /// size, or transparent, and animates in. The leaving view is drawn in the
-    /// parent's overlay, where a removed view stays visible, animates out by
-    /// (outX, outY), and is let go. The root's AutoTransition would animate the
+    /// size, transparent, or scaled by inScale about its centre, and animates
+    /// in. The leaving view is drawn in the parent's overlay, where a removed
+    /// view stays visible, animates out by (outX, outY) and outScale, and is
+    /// let go. The root's AutoTransition would animate the
     /// same change its own way, so it is ended first.
     public static void animateReplacement(ViewGroup sceneRoot, ViewGroup parent, View arriving,
                                           final View leaving, long durationMs, int curve,
-                                          float inX, float inY, boolean inFade,
-                                          final float outX, final float outY, final boolean outFade) {
+                                          float inX, float inY, boolean inFade, float inScale,
+                                          final float outX, final float outY, final boolean outFade,
+                                          final float outScale) {
         int width = parent.getWidth();
         int height = parent.getHeight();
         if (width == 0 || height == 0) return;
@@ -1035,7 +1037,9 @@ public class OmniEventBridge {
             arriving.setTranslationX(inX * width);
             arriving.setTranslationY(inY * height);
             if (inFade) arriving.setAlpha(0f);
-            arriving.animate().translationX(0f).translationY(0f).alpha(1f)
+            arriving.setScaleX(inScale);
+            arriving.setScaleY(inScale);
+            arriving.animate().translationX(0f).translationY(0f).alpha(1f).scaleX(1f).scaleY(1f)
                 .setDuration(durationMs).setInterpolator(easing).start();
         }
 
@@ -1043,13 +1047,15 @@ public class OmniEventBridge {
             final android.view.ViewGroupOverlay overlay = parent.getOverlay();
             overlay.add(leaving);
             leaving.animate().translationX(outX * width).translationY(outY * height)
-                .alpha(outFade ? 0f : 1f)
+                .alpha(outFade ? 0f : 1f).scaleX(outScale).scaleY(outScale)
                 .setDuration(durationMs).setInterpolator(easing)
                 .withEndAction(() -> {
                     overlay.remove(leaving);
                     leaving.setTranslationX(0f);
                     leaving.setTranslationY(0f);
                     leaving.setAlpha(1f);
+                    leaving.setScaleX(1f);
+                    leaving.setScaleY(1f);
                 })
                 .start();
         }

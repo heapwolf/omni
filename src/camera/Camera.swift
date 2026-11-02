@@ -108,12 +108,15 @@ public protocol CameraCapture: Sendable {
     func requestAuthorization() async -> CameraAuthorization
     /// Presents the platform's capture UI. Throws `.cancelled` if dismissed.
     func capture(_ options: CaptureOptions) async throws -> CapturedImage
-    /// Presents the platform's photo picker.
-    func pickImage() async throws -> CapturedImage
+    /// Presents the platform's photo picker. The chosen image is re-encoded as
+    /// `options` say: its longest edge capped, at their quality and format
+    /// (`facing` is the camera's, and ignored).
+    func pickImage(_ options: CaptureOptions) async throws -> CapturedImage
 }
 
 public extension CameraCapture {
     func capture() async throws -> CapturedImage { try await capture(CaptureOptions()) }
+    func pickImage() async throws -> CapturedImage { try await pickImage(CaptureOptions()) }
 }
 
 // MARK: - The one every app uses

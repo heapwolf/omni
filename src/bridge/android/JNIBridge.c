@@ -305,19 +305,19 @@ void omni_jni_remove_view(JNIEnv *env, jobject child) {
 // `arriving` or `leaving` may be NULL.
 void omni_jni_animate_replacement(JNIEnv *env, jobject scene_root, jobject parent, jobject arriving,
                                   jobject leaving, int duration_ms, int curve,
-                                  float in_x, float in_y, int in_fade,
-                                  float out_x, float out_y, int out_fade) {
+                                  float in_x, float in_y, int in_fade, float in_scale,
+                                  float out_x, float out_y, int out_fade, float out_scale) {
     jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     if (!bridgeClass) {
         omni_jni_clear_pending(env);
         return;
     }
     jmethodID method = (*env)->GetStaticMethodID(env, bridgeClass, "animateReplacement",
-        "(Landroid/view/ViewGroup;Landroid/view/ViewGroup;Landroid/view/View;Landroid/view/View;JIFFZFFZ)V");
+        "(Landroid/view/ViewGroup;Landroid/view/ViewGroup;Landroid/view/View;Landroid/view/View;JIFFZFFFZF)V");
     if (method) {
         (*env)->CallStaticVoidMethod(env, bridgeClass, method, scene_root, parent, arriving, leaving,
-                                     (jlong)duration_ms, curve, in_x, in_y, (jboolean)in_fade,
-                                     out_x, out_y, (jboolean)out_fade);
+                                     (jlong)duration_ms, curve, in_x, in_y, (jboolean)in_fade, in_scale,
+                                     out_x, out_y, (jboolean)out_fade, out_scale);
     }
     omni_jni_clear_pending(env);
     (*env)->DeleteLocalRef(env, bridgeClass);

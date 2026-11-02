@@ -56,7 +56,7 @@ final class UnimplementedBackendTests: XCTestCase {
         func capture(_ options: CaptureOptions) async throws -> CapturedImage {
             throw CameraError.notImplemented("test")
         }
-        func pickImage() async throws -> CapturedImage {
+        func pickImage(_ options: CaptureOptions) async throws -> CapturedImage {
             throw CameraError.notImplemented("test")
         }
     }
@@ -75,6 +75,25 @@ final class UnimplementedBackendTests: XCTestCase {
     func testConvenienceCaptureUsesDefaults() async {
         // Exercises the protocol extension overload, which is otherwise untested.
         do { _ = try await Unimplemented().capture() } catch {}
+    }
+
+    /// pickImage() is pickImage(_:) with the defaults, as capture() is.
+    func testConveniencePickUsesDefaults() async {
+        final class Asked: @unchecked Sendable { var options: CaptureOptions? }
+        struct Recording: CameraCapture {
+            let asked: Asked
+            var authorization: CameraAuthorization { get async { .unavailable } }
+            func requestAuthorization() async -> CameraAuthorization { .unavailable }
+            func capture(_ options: CaptureOptions) async throws -> CapturedImage { throw CameraError.cancelled }
+            func pickImage(_ options: CaptureOptions) async throws -> CapturedImage {
+                asked.options = options
+                throw CameraError.cancelled
+            }
+        }
+        let asked = Asked()
+        _ = try? await Recording(asked: asked).pickImage()
+        XCTAssertEqual(asked.options?.maxDimension, CaptureOptions().maxDimension)
+        XCTAssertEqual(asked.options?.quality, CaptureOptions().quality)
     }
 }
 

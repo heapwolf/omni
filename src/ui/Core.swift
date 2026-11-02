@@ -781,21 +781,25 @@ public struct EmptyView: OmniStructuralView {
         omni_jni_animate_replacement(env, root?.native, parentNative, child.native,
                                      old == child.native ? nil : old,
                                      Int32(animation.duration * 1000), animation.androidCurve,
-                                     arriving.x, arriving.y, arriving.fades ? 1 : 0,
-                                     leaving.x, leaving.y, leaving.fades ? 1 : 0)
+                                     arriving.x, arriving.y, arriving.fades ? 1 : 0, arriving.scale,
+                                     leaving.x, leaving.y, leaving.fades ? 1 : 0, leaving.scale)
     }
 
     /// A transition as Android animates it: an offset, in fractions of the
-    /// container's size, and whether it fades. Leading is left: no RTL yet.
+    /// container's size, whether it fades, and how much it's scaled about its
+    /// centre. Leading is left: no RTL yet.
     private struct AndroidMotion {
         var x: Float = 0
         var y: Float = 0
         var fades = false
+        var scale: Float = 1
 
         init(_ kind: AnyTransition.Kind) {
             switch kind {
             case .identity: break
-            case .opacity, .scale: fades = true
+            case .opacity: fades = true
+            // Never quite zero, as on iOS.
+            case .scale(let s): scale = Float(max(s, 0.001))
             case .move(let edge):
                 switch edge {
                 case .leading: x = -1
@@ -808,6 +812,7 @@ public struct EmptyView: OmniStructuralView {
                 x = first.x + second.x
                 y = first.y + second.y
                 fades = first.fades || second.fades
+                scale = first.scale * second.scale
             case .asymmetric(let insertion, _):
                 self = AndroidMotion(insertion)
             }

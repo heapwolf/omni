@@ -35,8 +35,8 @@ void omni_jni_remove_view(JNIEnv *env, jobject child);
 void omni_jni_move_child(JNIEnv *env, jobject parent, jobject child, int index);
 void omni_jni_animate_replacement(JNIEnv *env, jobject scene_root, jobject parent, jobject arriving,
                                   jobject leaving, int duration_ms, int curve,
-                                  float in_x, float in_y, int in_fade,
-                                  float out_x, float out_y, int out_fade);
+                                  float in_x, float in_y, int in_fade, float in_scale,
+                                  float out_x, float out_y, int out_fade, float out_scale);
 void omni_jni_set_layout_params(JNIEnv *env, jobject view, int width, int height);
 void omni_jni_set_linear_layout_params(JNIEnv *env, jobject view, int width, int height, float weight);
 /// The orientation of the stack holding `view` (0 across, 1 down), or -1 if it isn't in one.

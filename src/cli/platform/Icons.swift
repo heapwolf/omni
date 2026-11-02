@@ -2,7 +2,7 @@
 import Foundation
 
 /// Per-platform icon sizes and containers, generated at build time from one
-/// source image. Uses only sips and iconutil, plus a hand-rolled .ico packer.
+/// source image. Uses sips and iconutil on macOS, ImageMagick elsewhere, plus a hand-rolled .ico packer.
 enum AppIcon {
     /// Where each size comes from.
     enum Source {
@@ -37,11 +37,17 @@ enum AppIcon {
         }
     }
 
-    /// Resizes via sips, macOS's built-in image tool.
+    /// Resizes via sips, macOS's built-in image tool, and ImageMagick elsewhere:
+    /// Android builds run on Linux too. `!` forces the exact size, as `sips -z` does.
     static func resize(_ source: String, to size: Int, output: String) throws {
-        _ = try Shell.checked(
-            "sips -z \(size) \(size) \(shellQuote(source)) --out \(shellQuote(output))",
-            step: "resizing icon to \(size)x\(size)")
+        #if os(macOS)
+            let command = "sips -z \(size) \(size) \(shellQuote(source)) --out \(shellQuote(output))"
+        #else
+            // ImageMagick 7 is `magick`; 6 only has `convert`.
+            let tool = (try? Shell.run("command -v magick"))?.isEmpty == false ? "magick" : "convert"
+            let command = "\(tool) \(shellQuote(source)) -resize \(size)x\(size)! \(shellQuote(output))"
+        #endif
+        _ = try Shell.checked(command, step: "resizing icon to \(size)x\(size)")
     }
 
     // MARK: - iOS

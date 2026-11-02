@@ -382,14 +382,54 @@ struct AndroidToolchain {
         }
     }
 
-    /// JAVA_HOME, a JDK on PATH, or a Temurin build from Adoptium.
+    /// Whether `home` holds a real JDK. On macOS, /usr/bin/javac is a stub that
+    /// exists without any JDK installed and fails with "Unable to locate a Java
+    /// Runtime", so /usr never counts.
+    private func isJDK(_ home: String) -> Bool {
+        #if os(macOS)
+            if (home as NSString).standardizingPath == "/usr" { return false }
+        #endif
+        return fm.isExecutableFile(atPath: "\(home)/bin/javac")
+    }
+
+    /// JAVA_HOME, the macOS java_home registry, Android Studio's bundled JBR,
+    /// a JDK on PATH, or a Temurin build from Adoptium.
     func jdkHome() throws -> String {
-        if let home = env["JAVA_HOME"], fm.isExecutableFile(atPath: "\(home)/bin/javac") {
+        if let home = env["JAVA_HOME"], isJDK(home) {
             return home
         }
+
+        #if os(macOS)
+            // Lists installed JDKs (Temurin, Zulu, Homebrew casks, ...); exits
+            // non-zero and prints nothing useful when there are none.
+            if let result = try? Shell.exec("/usr/libexec/java_home", []),
+               result.status == 0, isJDK(result.output) {
+                return result.output
+            }
+            // Homebrew's openjdk formulae are keg-only: neither linked onto
+            // PATH nor registered with java_home, so look in the kegs.
+            for prefix in ["/opt/homebrew/opt", "/usr/local/opt"] {
+                let kegs = ((try? fm.contentsOfDirectory(atPath: prefix)) ?? [])
+                    .filter { $0 == "openjdk" || $0.hasPrefix("openjdk@") }
+                    .sorted { $0.compare($1, options: .numeric) == .orderedDescending }
+                for keg in kegs {
+                    let home = "\(prefix)/\(keg)/libexec/openjdk.jdk/Contents/Home"
+                    if isJDK(home) { return home }
+                }
+            }
+            for app in ["/Applications/Android Studio.app",
+                        "\(NSHomeDirectory())/Applications/Android Studio.app"] {
+                let jbr = "\(app)/Contents/jbr/Contents/Home"
+                if isJDK(jbr) { return jbr }
+            }
+        #endif
+
         if let javac = try? Shell.run("command -v javac"), !javac.isEmpty {
+            // Follow symlinks (Homebrew, update-alternatives), then
             // <home>/bin/javac -> <home>
-            return ((javac as NSString).deletingLastPathComponent as NSString).deletingLastPathComponent
+            let real = (javac as NSString).resolvingSymlinksInPath
+            let home = ((real as NSString).deletingLastPathComponent as NSString).deletingLastPathComponent
+            if isJDK(home) { return home }
         }
 
         // Cached from a previous run?
@@ -733,8 +773,9 @@ public struct AndroidBuilder {
             + "_MainActivity_startSwiftEngine"
     }
 
+    /// Named for the app (--output), not the library behind it.
     func apkPath(product: String, abi: String) -> String {
-        "\(packageRoot())/.omni/android/\(product)-\(abi).apk"
+        "\(packageRoot())/.omni/android/\(appName(product: product))-\(abi).apk"
     }
 
     /// Nearest enclosing directory with a Package.swift. --app-path is often an
@@ -823,7 +864,9 @@ public struct AndroidBuilder {
 
         if dynamicLibraries.count == 1 {
             let only = dynamicLibraries[0]
-            if target != "App" {
+            // Naming one of the package's own products (the app's executable) is
+            // the usual case, not a mistake worth a line.
+            if target != "App" && !everything.contains(target) {
                 Console.info("no dynamic library product named '\(target)'; using '\(only)'")
             }
             return only

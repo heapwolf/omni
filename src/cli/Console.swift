@@ -5,7 +5,7 @@ import Foundation
 /// one place deciding what a message looks like — a color and a symbol —
 /// instead of each call site picking its own emoji.
 enum Console {
-    private static let isColorEnabled = isatty(fileno(stdout)) != 0
+    private static let isColorEnabled = isatty(STDOUT_FILENO) != 0
 
     private static let reset = "\u{001B}[0m"
     private static let red = "\u{001B}[31m"

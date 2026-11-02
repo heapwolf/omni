@@ -21,8 +21,8 @@ public struct AndroidCamera: CameraCapture {
         try await AndroidCameraBridge.capture(options)
     }
 
-    public func pickImage() async throws -> CapturedImage {
-        try await AndroidCameraBridge.pickImage()
+    public func pickImage(_ options: CaptureOptions) async throws -> CapturedImage {
+        try await AndroidCameraBridge.pickImage(options)
     }
 }
 
@@ -100,7 +100,7 @@ private enum AndroidCameraBridge {
         return try AndroidImageEncoder.encode(data, options: options)
     }
 
-    static func pickImage() async throws -> CapturedImage {
+    static func pickImage(_ options: CaptureOptions) async throws -> CapturedImage {
         guard let env = omni_get_env(), let activity = omni_jni_activity() else {
             throw CameraError.platform("No activity to present from.")
         }
@@ -121,7 +121,7 @@ private enum AndroidCameraBridge {
         let data = Data(bytes: buffer, count: Int(length))
         free(buffer)
 
-        return try AndroidImageEncoder.encode(data, options: CaptureOptions())
+        return try AndroidImageEncoder.encode(data, options: options)
     }
 
     private static func awaitActivityResult(

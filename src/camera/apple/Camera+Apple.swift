@@ -34,9 +34,9 @@ public struct AppleCamera: CameraCapture {
         return try await present(source: .camera, options: options)
     }
 
-    public func pickImage() async throws -> CapturedImage {
+    public func pickImage(_ options: CaptureOptions) async throws -> CapturedImage {
         // The library needs no camera permission: the picker runs out of process.
-        try await present(source: .photoLibrary, options: CaptureOptions())
+        try await present(source: .photoLibrary, options: options)
     }
 
     @MainActor
@@ -209,12 +209,12 @@ public struct MacCamera: CameraCapture {
         return try await CaptureWindowController(options: options).present()
     }
 
-    public func pickImage() async throws -> CapturedImage {
-        try await Self.presentOpenPanel()
+    public func pickImage(_ options: CaptureOptions) async throws -> CapturedImage {
+        try await Self.presentOpenPanel(options)
     }
 
     @MainActor
-    private static func presentOpenPanel() async throws -> CapturedImage {
+    private static func presentOpenPanel(_ options: CaptureOptions) async throws -> CapturedImage {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
@@ -232,7 +232,7 @@ public struct MacCamera: CameraCapture {
               let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
             throw CameraError.platform("Could not read the chosen image.")
         }
-        return try MacImageEncoder.encode(cgImage, options: CaptureOptions())
+        return try MacImageEncoder.encode(cgImage, options: options)
     }
 
     private static func map(_ status: AVAuthorizationStatus) -> CameraAuthorization {
