@@ -325,8 +325,12 @@ struct Provisioner {
     // MARK: App ID
 
     private func bundle(_ api: ASC, identifier: String, name: String) throws -> String {
+        // Apple's filter also matches longer identifiers (com.example.app finds
+        // com.example.app.dev), so only an exact match is ours.
         let existing = ASC.rows(try api.request("GET", "/v1/bundleIds?filter[identifier]=\(identifier)"))
-        if let id = existing.first?["id"] as? String { return id }
+        if let id = existing.first(where: { ASC.attributes($0)["identifier"] as? String == identifier })?["id"] as? String {
+            return id
+        }
 
         let created = try api.request("POST", "/v1/bundleIds", body: [
             "data": ["type": "bundleIds",
