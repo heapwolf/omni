@@ -7,7 +7,7 @@ struct Omni: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "omni",
         abstract: "A CLI to compile and run cross-platform declarative UI framework.",
-        subcommands: [Build.self, Run.self, Package.self, Provision.self, Doctor.self]
+        subcommands: [Build.self, Run.self, Package.self, Provision.self, Doctor.self, Update.self]
     )
 
     // ParsableCommand's own synthesized main() catches everything with
@@ -264,5 +264,42 @@ struct Doctor: ParsableCommand {
             throw ExitCode.failure
         }
         try Setup.ensure(targetPlatform, mode: fix ? .fixAll : .report)
+    }
+}
+
+struct Update: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Updates omni: pulls its checkout (unless it has local changes), "
+            + "rebuilds, and relinks. The same as running install.sh again."
+    )
+
+    func run() throws {
+        guard let checkout = Self.sourceCheckout() else {
+            Console.failure("""
+                Couldn't find the checkout this omni was built from. Reinstall with:
+
+                  curl -fsSL https://raw.githubusercontent.com/heapwolf/omni/master/install.sh | bash
+                """)
+            throw ExitCode.failure
+        }
+        let result = try Shell.exec("/bin/bash", ["\(checkout)/install.sh"],
+                                    environment: ["OMNI_DIR": checkout], quiet: false)
+        if result.status != 0 { throw ExitCode(result.status) }
+    }
+
+    /// The binary lives at <checkout>/.build/.../omni; walk up to the
+    /// directory holding install.sh and Package.swift.
+    static func sourceCheckout() -> String? {
+        let fm = FileManager.default
+        guard let executable = Bundle.main.executableURL?.resolvingSymlinksInPath() else { return nil }
+        var dir = executable.deletingLastPathComponent()
+        while dir.path != "/" {
+            if fm.fileExists(atPath: dir.appendingPathComponent("install.sh").path),
+               fm.fileExists(atPath: dir.appendingPathComponent("Package.swift").path) {
+                return dir.path
+            }
+            dir = dir.deletingLastPathComponent()
+        }
+        return nil
     }
 }

@@ -33,8 +33,18 @@ omni run -p windows
 ## Install
 
 ```bash
-swift build -c release
-cp .build/release/omni /usr/local/bin/
+curl -fsSL https://raw.githubusercontent.com/heapwolf/omni/master/install.sh | bash
+```
+
+Or `./install.sh` from a checkout, which builds that checkout: an app that
+depends on omni by path (`../omni`) then uses a CLI that matches its library.
+It installs Apple's Command Line Tools if needed, builds omni, and links it at
+`~/.omni/bin/omni`. An older copy elsewhere on `PATH` is pointed at the new
+build. Then:
+
+```bash
+omni doctor -p android --fix   # or ios, ios-simulator, macos
+omni update                    # later: pull, rebuild, relink
 ```
 
 ## Use
