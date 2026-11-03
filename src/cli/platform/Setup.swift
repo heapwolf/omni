@@ -68,7 +68,11 @@ enum Setup {
                 Console.info("no setup checks for \(platform.rawValue) on this machine")
                 return
             }
-            print("\(platform.rawValue) on this Mac:")
+            #if os(macOS)
+                print("\(platform.rawValue) on this Mac:")
+            #else
+                print("\(platform.rawValue) on this machine:")
+            #endif
         }
 
         let interactive = isatty(STDIN_FILENO) == 1 && isatty(STDOUT_FILENO) == 1
@@ -394,7 +398,13 @@ struct AndroidSetup {
     private let tools = AndroidToolchain()
     private let fm = FileManager.default
 
-    var requirements: [Setup.Requirement] { [swift, swiftAndroidSDK, ndk, jdk, androidTools] }
+    var requirements: [Setup.Requirement] {
+        #if os(macOS)
+            return [swift, swiftAndroidSDK, ndk, jdk, androidTools]
+        #else
+            return [swift, swiftAndroidSDK, ndk, jdk, androidTools, imageMagick]
+        #endif
+    }
 
     var swift: Setup.Requirement {
         Setup.Requirement(name: "Swift (swift.org)") {
@@ -457,6 +467,21 @@ struct AndroidSetup {
             return .downloads("JDK 21 downloaded on the first build (about 200MB)")
         }
     }
+
+    #if !os(macOS)
+    /// Icons.swift resizes the app icon with sips on a Mac and ImageMagick elsewhere (`magick`, or `convert`
+    /// on ImageMagick 6): without it a first build on Linux fails at the icon, after the whole toolchain came down.
+    var imageMagick: Setup.Requirement {
+        Setup.Requirement(name: "ImageMagick") {
+            for tool in ["magick", "convert"] {
+                if let path = try? Shell.run("command -v \(tool)"), !path.isEmpty { return .ok(path) }
+            }
+            return .manual("not installed; the app icon is resized with it",
+                           ["sudo apt-get install -y imagemagick   # Debian, Ubuntu",
+                            "sudo dnf install -y ImageMagick       # Fedora"])
+        }
+    }
+    #endif
 
     var androidTools: Setup.Requirement {
         Setup.Requirement(name: "Android build tools") {
