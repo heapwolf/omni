@@ -108,7 +108,20 @@ enum AndroidError: LocalizedError {
 
 // MARK: - Toolchain
 
+final class OnceFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+    /// Sets the flag; returns what it was.
+    func swap(_ new: Bool) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        let old = value; value = new; return old
+    }
+}
+
 struct AndroidToolchain {
+    /// "using swift.org toolchain at ..." once a run, not once a lookup.
+    static let announcedSwift = OnceFlag()
+
     let root: String
     let buildToolsVersion = "36.0.0"
     let platformAPI = "34"
@@ -220,7 +233,7 @@ struct AndroidToolchain {
         FileHandle.standardOutput.write(Data("\n".utf8))
     }
 
-    private func download(_ url: String, to destination: String, label: String) throws {
+    func download(_ url: String, to destination: String, label: String) throws {
         if fm.fileExists(atPath: destination) { return }
         try fm.createDirectory(atPath: (destination as NSString).deletingLastPathComponent,
                                withIntermediateDirectories: true)
@@ -343,12 +356,41 @@ struct AndroidToolchain {
         #endif
     }
 
-    /// The NDK, downloaded if ANDROID_NDK_HOME is unset. The Swift Android SDK
-    /// links against its sysroot, so r27 is the floor.
-    func ndk() throws -> String {
-        if let fromEnv = env["ANDROID_NDK_HOME"], fm.fileExists(atPath: fromEnv) { return fromEnv }
+    /// The oldest NDK whose libc++_shared.so the Swift 6.4 runtime can load:
+    /// libswiftCore.so needs std::__ndk1::__hash_memory, which r28 and r29
+    /// lack. The APK ships the NDK's libc++, so an older one builds fine and
+    /// then dies at launch with "cannot locate symbol".
+    static let minimumNDKMajor = 30
 
-        let version = "r28b"
+    /// The NDK omni downloads when ANDROID_NDK_HOME is unset.
+    static let ndkVersion = "r30"
+
+    /// ANDROID_NDK_HOME if set, else omni's own copy if it's been downloaded.
+    /// `major` is nil when source.properties can't be read.
+    func installedNDK() -> (path: String, major: Int?, fromEnv: Bool)? {
+        if let fromEnv = env["ANDROID_NDK_HOME"], fm.fileExists(atPath: fromEnv) {
+            return (fromEnv, ndkMajor(fromEnv), true)
+        }
+        let own = "\(root)/android-ndk-\(Self.ndkVersion)"
+        guard fm.fileExists(atPath: "\(own)/source.properties") else { return nil }
+        return (own, ndkMajor(own), false)
+    }
+
+    /// The NDK, downloaded if ANDROID_NDK_HOME is unset.
+    func ndk() throws -> String {
+        if let fromEnv = env["ANDROID_NDK_HOME"], fm.fileExists(atPath: fromEnv) {
+            if let major = ndkMajor(fromEnv), major < Self.minimumNDKMajor {
+                throw AndroidError.missing("""
+                    ANDROID_NDK_HOME is NDK r\(major), but the Swift runtime needs
+                    r\(Self.minimumNDKMajor) or newer: with an older NDK's libc++
+                    the app crashes at launch. Unset ANDROID_NDK_HOME to let omni
+                    download r\(Self.minimumNDKMajor), or point it at a newer NDK.
+                    """)
+            }
+            return fromEnv
+        }
+
+        let version = Self.ndkVersion
         let installed = "\(root)/android-ndk-\(version)"
         if fm.fileExists(atPath: "\(installed)/source.properties") {
             stripPythonInstallers(installed)
@@ -374,6 +416,16 @@ struct AndroidToolchain {
         return installed
     }
 
+    /// The NDK's major version from source.properties ("Pkg.Revision = 30.0.x").
+    func ndkMajor(_ ndk: String) -> Int? {
+        guard let text = try? String(contentsOfFile: "\(ndk)/source.properties", encoding: .utf8),
+              let line = text.split(separator: "\n").first(where: { $0.hasPrefix("Pkg.Revision") }),
+              let value = line.split(separator: "=").last?.trimmingCharacters(in: .whitespaces),
+              let major = value.split(separator: ".").first.flatMap({ Int($0) })
+        else { return nil }
+        return major
+    }
+
     /// The NDK's Python without pip and setuptools (NDKPython says why).
     private func stripPythonInstallers(_ ndk: String) {
         let gone = NDKPython.stripInstallers(ndk: ndk, hostTag: ndkHostTag)
@@ -395,6 +447,12 @@ struct AndroidToolchain {
     /// JAVA_HOME, the macOS java_home registry, Android Studio's bundled JBR,
     /// a JDK on PATH, or a Temurin build from Adoptium.
     func jdkHome() throws -> String {
+        if let home = installedJDK() { return home }
+        return try installJDK()
+    }
+
+    /// A JDK already on this machine, or nil. Downloads nothing.
+    func installedJDK() -> String? {
         if let home = env["JAVA_HOME"], isJDK(home) {
             return home
         }
@@ -440,7 +498,11 @@ struct AndroidToolchain {
                 }
             }
         }
+        return nil
+    }
 
+    /// Temurin 21 from Adoptium into the toolchain directory.
+    private func installJDK() throws -> String {
         let url = "https://api.adoptium.net/v3/binary/latest/21/ga/"
             + "\(adoptiumOS)/\(adoptiumArch)/jdk/hotspot/normal/eclipse"
         let archive = "\(root)/temurin21.tar.gz"
@@ -479,16 +541,76 @@ struct AndroidToolchain {
         return path
     }
 
+    /// Xcode's compiler prints "swiftlang-"; swift.org's doesn't.
+    private func isSwiftOrg(_ candidate: String) -> Bool {
+        guard fm.isExecutableFile(atPath: candidate),
+              let result = try? Shell.exec(candidate, ["--version"]),
+              result.status == 0 else { return false }
+        return !result.output.contains("swiftlang-")
+    }
+
+    /// Where omni looks for a swift.org toolchain, best first.
+    private func swiftOrgCandidates() -> [String] {
+        var candidates = ["\(NSHomeDirectory())/.swiftly/bin/swift"]
+        for toolchains in ["\(NSHomeDirectory())/Library/Developer/Toolchains",
+                           "/Library/Developer/Toolchains"] {
+            let entries = (try? fm.contentsOfDirectory(atPath: toolchains)) ?? []
+            candidates += entries
+                .filter { $0.hasSuffix(".xctoolchain") }
+                .sorted { $0.compare($1, options: .numeric) == .orderedDescending }
+                .map { "\(toolchains)/\($0)/usr/bin/swift" }
+        }
+        return candidates
+    }
+
+    /// A swift.org `swift` already on this machine, or nil. OMNI_SWIFT wins
+    /// even when it's wrong, so swiftExecutable can say so.
+    func installedSwiftOrg() -> String? {
+        if let override = env["OMNI_SWIFT"] { return isSwiftOrg(override) ? override : nil }
+        if let onPath = try? Shell.run("command -v swift"), isSwiftOrg(onPath) { return onPath }
+        return swiftOrgCandidates().first(where: isSwiftOrg)
+    }
+
+    /// The newest Swift release swift.org publishes an Android SDK for.
+    func latestSwiftWithAndroidSDK() -> String? {
+        guard let releases = try? Shell.exec("/usr/bin/curl",
+                ["-fsSL", "https://www.swift.org/api/v1/install/releases.json"]),
+              releases.status == 0,
+              let data = releases.output.data(using: .utf8),
+              let list = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+        else { return nil }
+        return list
+            .filter { (($0["platforms"] as? [[String: Any]]) ?? [])
+                .contains { $0["platform"] as? String == "android-sdk" } }
+            .compactMap { $0["name"] as? String }
+            .max { $0.compare($1, options: .numeric) == .orderedAscending }
+    }
+
+    #if os(macOS)
+    /// Installs swift.org's toolchain package for this user only:
+    /// ~/Library/Developer/Toolchains, no administrator password, and Xcode's
+    /// own Swift is left alone. Returns the new `swift`.
+    @discardableResult
+    func installSwiftOrg(version: String) throws -> String {
+        let name = "swift-\(version)-RELEASE"
+        let url = "https://download.swift.org/swift-\(version)-release/xcode/\(name)/\(name)-osx.pkg"
+        let pkg = "\(root)/\(name)-osx.pkg"
+        try download(url, to: pkg, label: "Swift \(version) toolchain")
+
+        let install = try Shell.exec("/usr/sbin/installer",
+                                     ["-pkg", pkg, "-target", "CurrentUserHomeDirectory"])
+        try? fm.removeItem(atPath: pkg)
+        let swift = "\(NSHomeDirectory())/Library/Developer/Toolchains/\(name).xctoolchain/usr/bin/swift"
+        guard install.status == 0, isSwiftOrg(swift) else {
+            throw AndroidError.failed("installing Swift \(version)", install.output)
+        }
+        return swift
+    }
+    #endif
+
     /// A swift.org `swift`, even if PATH resolves to Xcode's: Xcode's compiler
     /// cannot read the Android SDK's modules.
     func swiftExecutable() throws -> String {
-        func isSwiftOrg(_ candidate: String) -> Bool {
-            guard fm.isExecutableFile(atPath: candidate),
-                  let result = try? Shell.exec(candidate, ["--version"]),
-                  result.status == 0 else { return false }
-            return !result.output.contains("swiftlang-")
-        }
-
         if let override = env["OMNI_SWIFT"] {
             guard isSwiftOrg(override) else {
                 throw AndroidError.missing("OMNI_SWIFT=\(override) is not a swift.org toolchain.")
@@ -500,19 +622,11 @@ struct AndroidToolchain {
             return onPath
         }
 
-        var candidates = ["\(NSHomeDirectory())/.swiftly/bin/swift"]
-        for toolchains in ["\(NSHomeDirectory())/Library/Developer/Toolchains",
-                           "/Library/Developer/Toolchains"] {
-            let entries = (try? fm.contentsOfDirectory(atPath: toolchains)) ?? []
-            candidates += entries
-                .filter { $0.hasSuffix(".xctoolchain") }
-                .sorted()
-                .reversed()
-                .map { "\(toolchains)/\($0)/usr/bin/swift" }
-        }
-
+        let candidates = swiftOrgCandidates()
         if let found = candidates.first(where: isSwiftOrg) {
-            Console.info("using swift.org toolchain at \(found)")
+            if !AndroidToolchain.announcedSwift.swap(true) {
+                Console.info("using swift.org toolchain at \(found)")
+            }
             return found
         }
 
@@ -527,10 +641,9 @@ struct AndroidToolchain {
             and the Android SDK's modules come from swift.org, so Xcode's
             compiler refuses them.
 
-            Install one:
+            omni installs one for you (for your user only, no password):
 
-              curl -L https://swiftlang.github.io/swiftly/swiftly-install.sh | bash
-              swiftly install 6.3.3
+              omni doctor -p android --fix
 
             Looked in:
             \(candidates.map { "  " + $0 }.joined(separator: "\n"))
@@ -546,10 +659,9 @@ struct AndroidToolchain {
         let output = (try? Shell.exec(swift, ["--version"]).output) ?? ""
         guard !output.isEmpty else {
             throw AndroidError.missing("""
-                No Swift toolchain on PATH. Install one, then re-run:
+                No Swift toolchain found. omni installs one for you:
 
-                  curl -L https://swiftlang.github.io/swiftly/swiftly-install.sh | bash
-                  swiftly install latest
+                  omni doctor -p android --fix
                 """)
         }
         // Anchor on "Swift version": swift prints a driver version first

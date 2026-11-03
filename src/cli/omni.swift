@@ -7,7 +7,7 @@ struct Omni: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "omni",
         abstract: "A CLI to compile and run cross-platform declarative UI framework.",
-        subcommands: [Build.self, Run.self, Package.self, Provision.self]
+        subcommands: [Build.self, Run.self, Package.self, Provision.self, Doctor.self]
     )
 
     // ParsableCommand's own synthesized main() catches everything with
@@ -35,6 +35,9 @@ struct Omni: ParsableCommand {
             Console.failure(error.errorDescription ?? "\(error)")
             Foundation.exit(1)
         } catch let error as AndroidError {
+            Console.failure(error.errorDescription ?? "\(error)")
+            Foundation.exit(1)
+        } catch let error as SetupError {
             Console.failure(error.errorDescription ?? "\(error)")
             Foundation.exit(1)
         } catch let error as FlagsError {
@@ -72,6 +75,7 @@ struct Build: ParsableCommand {
             throw ExitCode.failure
         }
         let flags = try flagOptions.resolve(appPath: appPath)
+        try Setup.ensure(targetPlatform, mode: .preflight)
 
         switch targetPlatform {
             case .android:
@@ -128,6 +132,7 @@ struct Package: ParsableCommand {
             throw ExitCode.failure
         }
         let flags = try flagOptions.resolve(appPath: appPath)
+        try Setup.ensure(targetPlatform, mode: .preflight)
 
         switch targetPlatform {
         case .macos:
@@ -180,6 +185,7 @@ struct Run: ParsableCommand {
             throw ExitCode.failure
         }
         let flags = try flagOptions.resolve(appPath: appPath)
+        try Setup.ensure(targetPlatform, mode: .preflight)
 
         switch targetPlatform {
             case .android:
@@ -236,5 +242,27 @@ struct Provision: ParsableCommand {
             return
         }
         try provisioner.run(product: output)
+    }
+}
+
+struct Doctor: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Checks this machine has what building for a platform needs. "
+            + "With --fix, installs what's missing, asking first for anything that "
+            + "needs a password, an Apple ID or a large download."
+    )
+
+    @Option(name: [.customShort("p"), .customLong("platform")], help: "Target platform (macos, ios, ios-simulator, android).")
+    var platform: String = "macos"
+
+    @Flag(name: .long, help: "Install what's missing.")
+    var fix = false
+
+    func run() throws {
+        guard let targetPlatform = Platform(rawValue: platform.lowercased()) else {
+            Console.failure("Invalid platform '\(platform)'. Options: macos, ios, ios-simulator, android.")
+            throw ExitCode.failure
+        }
+        try Setup.ensure(targetPlatform, mode: fix ? .fixAll : .report)
     }
 }

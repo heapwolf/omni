@@ -99,10 +99,17 @@ let photo = try await Camera.default.capture()
 | `omni run`       | Compile, install, launch                 |
 | `omni package`   | Installer: `.pkg`, `.deb`/`.rpm`, `.msi` |
 | `omni provision` | iOS certificate, App ID, device, profile |
+| `omni doctor`    | Check this Mac for a platform; `--fix` installs what's missing |
 
 ```bash
 omni package -p linux --format both
+omni doctor -p android --fix
 ```
+
+`build` and `run` check first and set up what they can: Homebrew, Apple's
+Command Line Tools, a swift.org toolchain, the Android NDK, SDK and a JDK,
+and for iOS, Xcode, its license and components, and a simulator. Anything
+that needs a password, an Apple ID or a large download is asked about first.
 
 ## Config
 

@@ -1,7 +1,7 @@
 // src/cli/platform/apple/AppleBuild.swift
 import Foundation
 
-public enum Platform: String {
+public enum Platform: String, Sendable {
     case macos
     case ios
     case iosSimulator = "ios-simulator"
