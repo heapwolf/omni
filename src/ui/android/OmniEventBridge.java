@@ -348,6 +348,17 @@ public class OmniEventBridge {
         private float downX, downY, lastY;
         private boolean dragging;
         private VelocityTracker tracker;
+        /// The detents as Swift sent them (PresentationOptions.androidDetents), their
+        /// heights in px in the same order, and the one the sheet rests at.
+        String spec = "";
+        int[] heights = { 0 };
+        int selected;
+        /// An EventHandlerInt told the index a drag settled at; 0 for none.
+        long settledPtr;
+        /// The height and finger position a drag began at.
+        private int dragStartHeight;
+        private float dragOriginY;
+        private android.animation.ValueAnimator heightAnimator;
 
         SheetHost(Context context, float radius) {
             super(context);
@@ -433,8 +444,96 @@ public class OmniEventBridge {
             return super.dispatchTouchEvent(e);
         }
 
+        int minHeight() { int m = Integer.MAX_VALUE; for (int h : heights) m = Math.min(m, h); return m; }
+        int maxHeight() { int m = 0; for (int h : heights) m = Math.max(m, h); return m; }
+        private boolean isResizable() { return heights.length > 1 && maxHeight() > minHeight(); }
+
+        int sheetHeight() {
+            ViewGroup.LayoutParams params = getLayoutParams();
+            return params != null && params.height > 0 ? params.height : getHeight();
+        }
+
+        void setSheetHeight(int height) {
+            ViewGroup.LayoutParams params = getLayoutParams();
+            if (params == null || params.height == height) return;
+            params.height = height;
+            setLayoutParams(params);
+        }
+
+        void animateHeight(int to) {
+            if (heightAnimator != null) heightAnimator.cancel();
+            int from = sheetHeight();
+            if (from == to || !isAttachedToWindow()) { setSheetHeight(to); return; }
+            heightAnimator = android.animation.ValueAnimator.ofInt(from, to);
+            heightAnimator.setDuration(280);
+            heightAnimator.setInterpolator(new android.view.animation.DecelerateInterpolator(1.6f));
+            heightAnimator.addUpdateListener(a -> setSheetHeight((Integer) a.getAnimatedValue()));
+            heightAnimator.start();
+        }
+
+        /// Heights in px for `spec`: "f" a fraction of the screen, "h" dp, "fit" the content's
+        /// own height at the sheet's width. Each at most 94% of the screen, as before:
+        /// a large sheet stops short of the top, as on iOS.
+        int[] heightsFor(String spec) {
+            android.util.DisplayMetrics metrics = getResources().getDisplayMetrics();
+            int screen = metrics.heightPixels, full = Math.round(screen * 0.94f);
+            String[] tokens = spec.isEmpty() ? new String[] { "f1" } : spec.split(",");
+            int[] result = new int[tokens.length];
+            for (int i = 0; i < tokens.length; i++) {
+                String token = tokens[i].trim();
+                int height;
+                try {
+                    if (token.equals("fit")) {
+                        height = fittedHeight(metrics.widthPixels, full);
+                    } else if (token.startsWith("h")) {
+                        height = Math.min(Math.round(Float.parseFloat(token.substring(1)) * metrics.density), screen);
+                    } else {
+                        height = Math.round(screen * Math.min(Float.parseFloat(token.substring(1)), 0.94f));
+                    }
+                } catch (NumberFormatException ex) {
+                    height = full;
+                }
+                result[i] = Math.max(height, 1);
+            }
+            return result;
+        }
+
+        /// The content measured at `width`, up to `full`, with room for the navigation bar.
+        private int fittedHeight(int width, int full) {
+            View content = getChildCount() > 0 ? getChildAt(0) : null;
+            if (content == null) return full;
+            int bottom = getPaddingBottom();
+            if (bottom == 0 && getContext() instanceof Activity && android.os.Build.VERSION.SDK_INT >= 30) {
+                android.view.WindowInsets insets = ((Activity) getContext()).getWindow().getDecorView().getRootWindowInsets();
+                if (insets != null) bottom = insets.getInsets(android.view.WindowInsets.Type.systemBars()).bottom;
+            }
+            content.measure(MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY),
+                            MeasureSpec.makeMeasureSpec(full - bottom, MeasureSpec.AT_MOST));
+            return Math.min(content.getMeasuredHeight() + bottom, full);
+        }
+
+        /// Moves to `selected` of `spec`, unless it is there or a finger is on the sheet.
+        void update(String spec, int selected) {
+            int[] next = heightsFor(spec);
+            int index = Math.max(0, Math.min(selected, next.length - 1));
+            if (spec.equals(this.spec) && index == this.selected && java.util.Arrays.equals(next, heights)) return;
+            this.spec = spec;
+            this.heights = next;
+            this.selected = index;
+            growWindow();
+            if (!dragging) animateHeight(next[index]);
+        }
+
+        /// The window is the tallest detent's height; the sheet moves inside it.
+        private void growWindow() {
+            if (dialog == null || dialog.getWindow() == null) return;
+            android.view.Window window = dialog.getWindow();
+            int tallest = maxHeight();
+            if (window.getAttributes().height != tallest) window.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, tallest);
+        }
+
         @Override public boolean onInterceptTouchEvent(MotionEvent e) {
-            if (!isDismissable) return false;
+            if (!isDismissable && !isResizable()) return false;
             track(e);
             switch (e.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN:
@@ -442,9 +541,16 @@ public class OmniEventBridge {
                     return false;
                 case MotionEvent.ACTION_MOVE:
                     float dy = e.getRawY() - downY, dx = e.getRawX() - downX;
-                    if (dy > slop && dy > Math.abs(dx) * 1.5f && !scrollsUp(getChildAt(0), e.getX(), e.getY())) {
-                        dragging = true;
-                        lastY = e.getRawY();
+                    if (Math.abs(dy) <= slop || Math.abs(dy) <= Math.abs(dx) * 1.5f) return false;
+                    // Down: the sheet's, unless what's under the finger scrolls up; it shrinks
+                    // to the next detent, or past the smallest it goes. Up: grows to a taller
+                    // detent first, as on iOS, then the content scrolls.
+                    boolean down = dy > 0
+                        && !scrollsUp(getChildAt(0), e.getX(), e.getY())
+                        && (isDismissable || sheetHeight() > minHeight());
+                    boolean up = dy < 0 && sheetHeight() < maxHeight();
+                    if (down || up) {
+                        beginDrag(e.getRawY());
                         return true;
                     }
                     return false;
@@ -453,16 +559,37 @@ public class OmniEventBridge {
             }
         }
 
+        private void beginDrag(float y) {
+            dragging = true;
+            lastY = y;
+            dragOriginY = y;
+            if (heightAnimator != null) heightAnimator.cancel();
+            dragStartHeight = sheetHeight();
+        }
+
+        /// Shown `visible` px of sheet: taller is the sheet's height, up to the tallest detent;
+        /// below the smallest, the sheet slides down instead.
+        private void dragTo(float visible) {
+            int min = minHeight(), max = maxHeight();
+            if (visible >= min) {
+                setSheetHeight(Math.round(Math.min(visible, max)));
+                setTranslationY(0);
+            } else {
+                setSheetHeight(min);
+                setTranslationY(isDismissable ? min - visible : 0);
+            }
+        }
+
         @Override public boolean onTouchEvent(MotionEvent e) {
-            if (!isDismissable) return false;
+            if (!isDismissable && !isResizable()) return false;
             track(e);
             switch (e.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN:
                     downX = e.getRawX(); downY = e.getRawY(); lastY = downY;
                     return true;
                 case MotionEvent.ACTION_MOVE:
-                    if (!dragging && e.getRawY() - downY > slop) dragging = true;
-                    if (dragging) setTranslationY(Math.max(0, getTranslationY() + e.getRawY() - lastY));
+                    if (!dragging && Math.abs(e.getRawY() - downY) > slop) beginDrag(e.getRawY());
+                    if (dragging) dragTo(dragStartHeight - (e.getRawY() - dragOriginY));
                     lastY = e.getRawY();
                     return true;
                 case MotionEvent.ACTION_UP:
@@ -474,15 +601,39 @@ public class OmniEventBridge {
                         tracker.recycle();
                         tracker = null;
                     }
-                    float fling = 1000 * getResources().getDisplayMetrics().density;
-                    boolean goes = dragging && (getTranslationY() > getHeight() * 0.25f || velocity > fling);
+                    boolean wasDragging = dragging;
                     dragging = false;
-                    if (goes) {
+                    if (!wasDragging) return true;
+                    float fling = 1000 * getResources().getDisplayMetrics().density;
+                    if (getTranslationY() > 0) {
+                        // Below the smallest detent: past a quarter of it, or flung, it goes.
+                        boolean goes = getTranslationY() > minHeight() * 0.25f || velocity > fling;
+                        if (goes) {
+                            animate().translationY(getHeight()).setDuration(180).withEndAction(() -> {
+                                if (dialog != null) dialog.dismiss();
+                            }).start();
+                        } else {
+                            animate().translationY(0).setDuration(200).start();
+                        }
+                        return true;
+                    }
+                    if (isDismissable && sheetHeight() <= minHeight() && velocity > fling) {
+                        // Flung down from the smallest detent.
                         animate().translationY(getHeight()).setDuration(180).withEndAction(() -> {
                             if (dialog != null) dialog.dismiss();
                         }).start();
-                    } else {
-                        animate().translationY(0).setDuration(200).start();
+                        return true;
+                    }
+                    // The detent nearest where a fling would carry it.
+                    float projected = sheetHeight() - velocity * 0.12f;
+                    int nearest = 0;
+                    for (int i = 1; i < heights.length; i++) {
+                        if (Math.abs(heights[i] - projected) < Math.abs(heights[nearest] - projected)) nearest = i;
+                    }
+                    animateHeight(heights[nearest]);
+                    if (nearest != selected) {
+                        selected = nearest;
+                        if (settledPtr != 0) dispatchInt(settledPtr, nearest);
                     }
                     return true;
                 default:
@@ -503,6 +654,19 @@ public class OmniEventBridge {
         if (host.getChildCount() > 0) host.removeViewAt(0);
         host.addView(content, 0, new android.widget.FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        // A fitted detent measures the new content.
+        if (host.spec.contains("fit")) host.post(() -> host.update(host.spec, host.selected));
+    }
+
+    /// The open sheet's detents or selection changed (Swift's SheetState.applyOptions).
+    public static void updateSheet(Dialog dialog, String detents, int selected, boolean isDismissable) {
+        if (dialog == null || dialog.getWindow() == null) return;
+        SheetHost host = findSheetHost(dialog.getWindow().getDecorView());
+        if (host == null) return;
+        host.isDismissable = isDismissable;
+        dialog.setCancelable(isDismissable);
+        dialog.setCanceledOnTouchOutside(isDismissable);
+        host.update(detents, selected);
     }
 
     private static SheetHost findSheetHost(View view) {
@@ -517,8 +681,11 @@ public class OmniEventBridge {
         return null;
     }
 
-    public static Dialog presentSheet(View content, long onDismissPtr, float fraction,
-                                      float heightDp, float cornerRadiusDp,
+    /// `detents`: PresentationOptions.androidDetents, smallest first; it opens at
+    /// `selected`. With more than one, a drag moves it between them and tells
+    /// `onSettledPtr` the index it settled at.
+    public static Dialog presentSheet(View content, long onDismissPtr, long onSettledPtr,
+                                      String detents, int selected, float cornerRadiusDp,
                                       boolean showsIndicator, boolean isDismissable, int surfaceColor) {
         Log.i("OmniLayout", "sheet presented");
         Context ctx = content.getContext();
@@ -549,6 +716,10 @@ public class OmniEventBridge {
         });
         host.addView(content, new android.widget.FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        host.settledPtr = onSettledPtr;
+        host.spec = detents;
+        host.heights = host.heightsFor(detents);
+        host.selected = Math.max(0, Math.min(selected, host.heights.length - 1));
 
         if (showsIndicator) {
             // Over the content, as on iOS; the content leaves room for it.
@@ -564,15 +735,26 @@ public class OmniEventBridge {
             host.addView(indicator, params);
         }
 
-        dialog.setContentView(host);
+        // The window is as tall as the tallest detent; the sheet sits on its bottom edge at
+        // the selected one, so moving between them is a layout, not a window resize. A tap
+        // above the sheet is a tap outside it.
+        android.widget.FrameLayout frame = new android.widget.FrameLayout(ctx);
+        frame.addView(host, new android.widget.FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, host.heights[host.selected], Gravity.BOTTOM));
+        frame.setOnTouchListener((v, e) -> {
+            if (e.getActionMasked() == MotionEvent.ACTION_UP && e.getY() < host.getTop() + host.getTranslationY()
+                    && host.isDismissable) {
+                dialog.cancel();
+            }
+            return true;
+        });
+        dialog.setContentView(frame);
         dialog.setCancelable(isDismissable);
         dialog.setCanceledOnTouchOutside(isDismissable);
 
         android.view.Window window = dialog.getWindow();
         if (window != null) {
-            int height = heightDp > 0
-                ? Math.round(heightDp * density)
-                : Math.round(screen * Math.min(fraction, 0.94f));
+            int height = host.maxHeight();
             window.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(Color.TRANSPARENT));
             // Down behind the navigation bar, as iOS's sheet goes under the home indicator:
             // fitted to the bars, the sheet stopped above it and the screen showed in a gap.
@@ -1379,6 +1561,17 @@ public class OmniEventBridge {
 
         private static int size(int spec, int minimum) {
             return MeasureSpec.getMode(spec) == MeasureSpec.EXACTLY ? MeasureSpec.getSize(spec) : minimum;
+        }
+    }
+
+    /// A modifier's container. Passing through (.allowsHitTesting(false)), it refuses every
+    /// touch, and its parent offers the touch to the views behind it instead.
+    public static class OmniContainer extends android.widget.FrameLayout {
+        private boolean passThrough = false;
+        public OmniContainer(Context context) { super(context); }
+        public void setPassThrough(boolean on) { passThrough = on; }
+        @Override public boolean dispatchTouchEvent(MotionEvent e) {
+            return !passThrough && super.dispatchTouchEvent(e);
         }
     }
 

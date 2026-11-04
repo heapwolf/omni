@@ -92,6 +92,39 @@ public class SheetState {
     #elseif os(Android)
         public var sheetDialog: NativeView?
     #endif
+    /// A re-apply of the sheet's options is queued (onPresentationRender).
+    var isApplyPending = false
+    /// The detents and selection last applied, so a render that changed neither is let be.
+    var appliedDetents: String?
+
+    /// The content's detents and the rest, applied to the open sheet: after a render
+    /// inside it, coalesced to one per turn, once the whole tree has rendered.
+    @MainActor func scheduleApply() {
+        guard !isApplyPending else { return }
+        isApplyPending = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.isApplyPending = false
+            self.applyOptions(onlyIfChanged: true)
+        }
+    }
+
+    @MainActor func applyOptions(onlyIfChanged: Bool = false) {
+        guard isPresented, let node = sheetNode else { return }
+        let options = PresentationOptions.collect(from: node)
+        let key = options.orderedDetents.map(\.identifier).joined(separator: ",")
+            + "@" + (options.selection?.wrappedValue.identifier ?? "")
+        if onlyIfChanged, key == appliedDetents { return }
+        appliedDetents = key
+        #if os(iOS)
+        if let controller = sheetController { options.apply(to: controller, animated: true) }
+        #elseif os(Android)
+        if let dialog = sheetDialog {
+            omni_jni_update_sheet(OmniAndroid.getEnv(), dialog, options.androidDetents, Int32(options.androidSelected),
+                                  options.interactiveDismissDisabled == true ? 0 : 1)
+        }
+        #endif
+    }
 
     deinit {
         // Unmount on the main actor.
@@ -354,20 +387,25 @@ public struct SheetModifierView<SheetContent: View>: NativeComponent {
 
                 gtk_widget_show_all(dialog)
             #elseif os(Android)
-                // A bottom sheet at one height: the selected detent, else the
-                // smallest, which is where iOS opens.
+                // A bottom sheet at its detents: opened at the selected one, else the
+                // smallest, which is where iOS opens; dragged between them.
                 let options = PresentationOptions.collect(from: node)
-                let detent = options.selection?.wrappedValue ?? options.orderedDetents.first ?? .large
-                var heightDp: Float = 0
-                if case .height(let height) = detent.kind { heightDp = Float(height) }
                 let showsIndicator = options.dragIndicator == .visible
                     || (options.dragIndicator != .hidden && options.orderedDetents.count > 1)
 
                 let dismissed = EventHandlerVoid { self.isPresented.wrappedValue = false }
+                // A drag that settled at another detent: the index among orderedDetents.
+                let settled = EventHandlerInt { [weak node] index in
+                    guard let node else { return }
+                    let current = PresentationOptions.collect(from: node)
+                    let detents = current.orderedDetents
+                    if detents.indices.contains(index) { current.selection?.wrappedValue = detents[index] }
+                }
                 state.sheetDialog = omni_jni_present_sheet(
                     OmniAndroid.getEnv(), sheetNative,
                     Unmanaged.passRetained(dismissed).toOpaque(),
-                    Float(detent.approximateFraction), heightDp,
+                    Unmanaged.passRetained(settled).toOpaque(),
+                    options.androidDetents, Int32(options.androidSelected),
                     // Unless one is given, the app's sheets' (the PIN sheet's 24).
                     Float(options.cornerRadius ?? 24),
                     showsIndicator ? 1 : 0,
@@ -375,6 +413,10 @@ public struct SheetModifierView<SheetContent: View>: NativeComponent {
                     // iOS's sheet colours, as the scheme has them, unless one is given.
                     EffectBackgroundView.argb(options.background
                         ?? Color(light: .white, dark: .rgba(r: 0.11, g: 0.11, b: 0.12))))
+            #endif
+            #if os(iOS) || os(Android)
+            // A selection or detents changed by the sheet's own state, not the presenter's.
+            node.onPresentationRender = { [weak state] in state?.scheduleApply() }
             #endif
 
         } else if shouldShow && state.isPresented {
@@ -390,6 +432,8 @@ public struct SheetModifierView<SheetContent: View>: NativeComponent {
                 if let native = node.native, let dialog = state.sheetDialog {
                     omni_jni_set_sheet_content(OmniAndroid.getEnv(), dialog, native)
                 }
+                // Detents may have changed, or the selection been set from code.
+                state.applyOptions()
                 #endif
                 #if os(iOS)
                 if let native = node.native, let host = state.sheetController?.view {
@@ -401,9 +445,7 @@ public struct SheetModifierView<SheetContent: View>: NativeComponent {
                     }
                 }
                 // Detents may have changed, or the selection been set from code.
-                if let controller = state.sheetController {
-                    PresentationOptions.collect(from: node).apply(to: controller, animated: true)
-                }
+                state.applyOptions()
                 #endif
             }
 

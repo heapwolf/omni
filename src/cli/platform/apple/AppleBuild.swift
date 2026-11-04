@@ -238,6 +238,11 @@ public struct AppleBuilder {
                           step: "decoding the provisioning profile")
         try Shell.checked("/usr/libexec/PlistBuddy -x -c 'Print :Entitlements' \"\(iosDir)/profile.plist\" > \"\(iosDir)/Entitlements.plist\"",
                           step: "extracting entitlements")
+        if OmniManifest.load(from: path).signInWithApple == true,
+           let granted = try? String(contentsOfFile: "\(iosDir)/Entitlements.plist", encoding: .utf8),
+           !granted.contains("com.apple.developer.applesignin") {
+            Console.warning("omni.json asks for Sign in with Apple, but the provisioning profile doesn't grant it: turn on Sign in with Apple for the App ID in Apple's developer portal, then run omni provision again. Until then it fails on this device.")
+        }
 
         Console.info("Code signing for iOS Device...")
         let identity = try signingIdentity(profilePlist: "\(iosDir)/profile.plist", scratch: iosDir)
@@ -315,12 +320,31 @@ public struct AppleBuilder {
         try fonts.copy(into: appBundle)
 
         Console.info("Ad-hoc signing the Simulator bundle...")
-        try Shell.checked("codesign --force --sign - --timestamp=none \"\(appBundle)\"",
+        // The Simulator reads entitlements from an ad-hoc signature, as
+        // Xcode signs its builds; Sign in with Apple refuses an app without.
+        var entitlements = ""
+        if OmniManifest.load(from: path).signInWithApple == true {
+            let file = URL(fileURLWithPath: appBundle).deletingLastPathComponent().appendingPathComponent("Entitlements.plist").path
+            try Self.simulatorEntitlements.write(toFile: file, atomically: true, encoding: .utf8)
+            entitlements = "--entitlements \"\(file)\" "
+        }
+        try Shell.checked("codesign --force --sign - --timestamp=none \(entitlements)\"\(appBundle)\"",
                           step: "ad-hoc signing")
 
         Console.success("Simulator Build Complete! App bundle located at:")
         print("   \(appBundle)")
     }
+
+    static let simulatorEntitlements = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+            <key>com.apple.developer.applesignin</key>
+            <array><string>Default</string></array>
+        </dict>
+        </plist>
+        """
 
     // MARK: - Deployment / Execution Helpers
 

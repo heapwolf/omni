@@ -127,9 +127,13 @@ void omni_jni_attach_swipe_gestures(JNIEnv *env, jobject view, void* left_ptr, v
 void omni_jni_set_clip_radius(JNIEnv *env, jobject view, float radius, int isCircular);
 
 void omni_jni_attach_on_scroll_change(JNIEnv *env, jobject view, void* swift_ptr);
-jobject omni_jni_present_sheet(JNIEnv *env, jobject content, void* swift_ptr,
-                               float fraction, float height_dp, float corner_radius_dp,
+/// `detents`: PresentationOptions.androidDetents; `selected`, an index in them.
+/// `settled_ptr`: an EventHandlerInt told the detent a drag settled at.
+jobject omni_jni_present_sheet(JNIEnv *env, jobject content, void* swift_ptr, void* settled_ptr,
+                               const char* detents, int selected, float corner_radius_dp,
                                int shows_indicator, int is_dismissable, int surface_argb);
+/// The open sheet moves to `detents`' `selected` one, if it isn't there.
+void omni_jni_update_sheet(JNIEnv *env, jobject dialog, const char* detents, int selected, int is_dismissable);
 /// The sheet shows `content` in place of what it held (its root's native changed).
 void omni_jni_set_sheet_content(JNIEnv *env, jobject dialog, jobject content);
 jobject omni_jni_present_alert(JNIEnv *env, jobject anchor, const char* title, const char* message,

@@ -45,6 +45,18 @@ private struct Covered: View {
     }
 }
 
+/// The same lid, drawn but not hit-tested: taps go through it.
+private struct SeeThrough: View {
+    var body: some View {
+        ZStack {
+            Button("Under") { sent += 1 }.accessibilityIdentifier("under")
+            Text("Lid").frame(width: 400, height: 400).background(.white)
+                .onTapGesture {}
+                .allowsHitTesting(false)
+        }
+    }
+}
+
 final class ProbeTests: XCTestCase {
 
     /// The view in a window of its own, through the same host a journey uses.
@@ -111,6 +123,13 @@ final class ProbeTests: XCTestCase {
             guard case .covered = error else { return XCTFail("\(error)") }
         }
         XCTAssertEqual(sent, 0)
+    }
+
+    @MainActor func testATapGoesThroughWhatIsNotHitTested() async throws {
+        sent = 0
+        let (probe, _) = mount(SeeThrough())
+        try await probe.tap("under")
+        XCTAssertEqual(sent, 1)
     }
 
     @MainActor func testAMissingElementSaysWhatIsOnScreen() async throws {

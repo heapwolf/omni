@@ -1352,15 +1352,21 @@ static jobject omni_jni_call_bridge_dialog(JNIEnv *env, const char* method, cons
     return global;
 }
 
-jobject omni_jni_present_sheet(JNIEnv *env, jobject content, void* swift_ptr,
-                               float fraction, float height_dp, float corner_radius_dp,
+jobject omni_jni_present_sheet(JNIEnv *env, jobject content, void* swift_ptr, void* settled_ptr,
+                               const char* detents, int selected, float corner_radius_dp,
                                int shows_indicator, int is_dismissable, int surface_argb) {
     jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
+    if (!bridgeClass) { omni_jni_clear_pending(env); return NULL; }
     jmethodID m = (*env)->GetStaticMethodID(env, bridgeClass, "presentSheet",
-        "(Landroid/view/View;JFFFZZI)Landroid/app/Dialog;");
-    jobject dialog = m ? (*env)->CallStaticObjectMethod(env, bridgeClass, m, content,
-        (jlong)swift_ptr, (jfloat)fraction, (jfloat)height_dp, (jfloat)corner_radius_dp,
-        (jboolean)shows_indicator, (jboolean)is_dismissable, (jint)surface_argb) : NULL;
+        "(Landroid/view/View;JJLjava/lang/String;IFZZI)Landroid/app/Dialog;");
+    jobject dialog = NULL;
+    if (m) {
+        jstring jDetents = (*env)->NewStringUTF(env, detents ? detents : "");
+        dialog = (*env)->CallStaticObjectMethod(env, bridgeClass, m, content,
+            (jlong)swift_ptr, (jlong)settled_ptr, jDetents, (jint)selected, (jfloat)corner_radius_dp,
+            (jboolean)shows_indicator, (jboolean)is_dismissable, (jint)surface_argb);
+        (*env)->DeleteLocalRef(env, jDetents);
+    }
     omni_jni_clear_pending(env);
     (*env)->DeleteLocalRef(env, bridgeClass);
     if (!dialog) return NULL;
@@ -1369,6 +1375,20 @@ jobject omni_jni_present_sheet(JNIEnv *env, jobject content, void* swift_ptr,
     jobject global = (*env)->NewGlobalRef(env, dialog);
     (*env)->DeleteLocalRef(env, dialog);
     return global;
+}
+
+void omni_jni_update_sheet(JNIEnv *env, jobject dialog, const char* detents, int selected, int is_dismissable) {
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
+    if (!bridgeClass) { omni_jni_clear_pending(env); return; }
+    jmethodID m = (*env)->GetStaticMethodID(env, bridgeClass, "updateSheet",
+        "(Landroid/app/Dialog;Ljava/lang/String;IZ)V");
+    if (m) {
+        jstring jDetents = (*env)->NewStringUTF(env, detents ? detents : "");
+        (*env)->CallStaticVoidMethod(env, bridgeClass, m, dialog, jDetents, (jint)selected, (jboolean)is_dismissable);
+        (*env)->DeleteLocalRef(env, jDetents);
+    }
+    omni_jni_clear_pending(env);
+    (*env)->DeleteLocalRef(env, bridgeClass);
 }
 
 void omni_jni_set_sheet_content(JNIEnv *env, jobject dialog, jobject content) {

@@ -15,6 +15,11 @@ struct OmniManifest: Decodable {
     /// `{"cloudProjectNumber": "123456789012"}`. Without it no Play code is
     /// built in (vendor/play-integrity).
     var playIntegrity: PlayIntegrity?
+    /// Sign in with Apple (OmniUI's AppleSignIn). A device build's
+    /// entitlement comes from its provisioning profile, once the App ID has
+    /// the capability; this gives the Simulator build the same entitlement,
+    /// and has a device build say when its profile lacks it.
+    var signInWithApple: Bool?
 
     struct PlayIntegrity: Decodable {
         var cloudProjectNumber: String

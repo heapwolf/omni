@@ -55,14 +55,22 @@ extension TextField {
         if let tf = view as? UITextField {
             if tf.text != textBinding.wrappedValue { tf.text = textBinding.wrappedValue }
 
-            tf.keyboardType = Self.uiKeyboardType(configuration.keyboardType)
-            tf.autocapitalizationType = Self.uiAutocapitalization(configuration.resolvedAutocapitalization)
-            tf.autocorrectionType = configuration.resolvedAutocorrectionDisabled ? .no : .yes
-            tf.returnKeyType = Self.uiReturnKey(configuration.submitLabel)
+            // Each only when it changes. Set again while it is typed into, an input trait makes
+            // the keyboard reload, and its suggestion bar comes and goes: the keyboard bounces on
+            // every keystroke of a field whose screen renders as it's typed (a live search).
+            let keyboard = Self.uiKeyboardType(configuration.keyboardType)
+            if tf.keyboardType != keyboard { tf.keyboardType = keyboard }
+            let capitals = Self.uiAutocapitalization(configuration.resolvedAutocapitalization)
+            if tf.autocapitalizationType != capitals { tf.autocapitalizationType = capitals }
+            let correction: UITextAutocorrectionType = configuration.resolvedAutocorrectionDisabled ? .no : .yes
+            if tf.autocorrectionType != correction { tf.autocorrectionType = correction }
+            let returnKey = Self.uiReturnKey(configuration.submitLabel)
+            if tf.returnKeyType != returnKey { tf.returnKeyType = returnKey }
             let contentType = configuration.contentType.map(Self.uiContentType)
             if tf.textContentType != contentType { tf.textContentType = contentType }
-            tf.borderStyle = configuration.style.isPlain ? .none : .roundedRect
-            if let font = Tracker.current?.environment.font { tf.font = font.uiFont }
+            let border: UITextField.BorderStyle = configuration.style.isPlain ? .none : .roundedRect
+            if tf.borderStyle != border { tf.borderStyle = border }
+            if let font = Tracker.current?.environment.font?.uiFont, tf.font != font { tf.font = font }
 
             applyFocus(tf)
         }

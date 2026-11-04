@@ -450,6 +450,10 @@ public struct EmptyView: OmniStructuralView {
     /// by a render inside it: the holder shows the new one, moving the two
     /// with the removal and insertion read from the node that changed.
     var onRootNativeChange: ((_ native: NativeView?, _ removal: AnyTransition?, _ insertion: AnyTransition?) -> Void)?
+    /// A detached root's holder (a sheet) told when a node inside it rendered
+    /// .presentationDetents & co. again: a selection set from the sheet's own
+    /// state reaches the sheet, which the presenter's renders alone missed.
+    var onPresentationRender: (() -> Void)?
     /// Carriers this node's body was, recorded as environmentModifier is: a
     /// structural body is unpacked into this node, so no node holds it.
     var transition: AnyTransition?
@@ -865,6 +869,11 @@ public struct EmptyView: OmniStructuralView {
         node.environmentModifier = (bodyView as? EnvironmentModifierView)?.modifier
         node.transition = (bodyView as? TransitionModifierView)?.transition
         node.presentation = (bodyView as? PresentationModifierView)?.options
+        if node.presentation != nil {
+            var root = node
+            while let up = root.parent { root = up }
+            root.onPresentationRender?()
+        }
         node.accessibilityIdentifier = (bodyView as? AccessibilityIdentifierView)?.identifier
         node.accessibilityHidden = (bodyView as? AccessibilityHiddenView)?.isHidden
         node.accessibility = (bodyView as? AccessibilityAttributesView)?.attributes

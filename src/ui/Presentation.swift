@@ -12,8 +12,8 @@
 // channel, so the sheet reads them from its content's node tree after each
 // render (SheetModifierView, Routing.swift).
 //
-// iOS applies all of them. macOS ignores detents, as SwiftUI does there;
-// Linux, Windows and Android ignore them all for now.
+// iOS and Android apply all of them. macOS ignores detents, as SwiftUI does
+// there; Linux and Windows ignore them all for now.
 
 import Foundation
 
@@ -158,6 +158,29 @@ public extension View {
                                  content: self)
     }
 }
+
+#if os(Android)
+extension PresentationOptions {
+    /// orderedDetents for OmniEventBridge.presentSheet: comma-separated, each "f" and a
+    /// fraction of the screen, "h" and a height in dp, or "fit" for the content's own.
+    var androidDetents: String {
+        orderedDetents.map { detent -> String in
+            switch detent.kind {
+            case .medium: return "f0.5"
+            case .large: return "f1"
+            case .fraction(let fraction): return "f\(fraction)"
+            case .height(let height): return "h\(height)"
+            case .fitted: return "fit"
+            }
+        }.joined(separator: ",")
+    }
+
+    /// The selected detent's index in orderedDetents; the smallest when none is.
+    var androidSelected: Int {
+        selection.flatMap { orderedDetents.firstIndex(of: $0.wrappedValue) } ?? 0
+    }
+}
+#endif
 
 #if os(macOS)
 extension PresentationOptions {

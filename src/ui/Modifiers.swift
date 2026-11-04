@@ -171,6 +171,9 @@ public struct ModifierView: NativeComponent {
     public var padding: EdgeInsets?
     /// nil means inherit — only an explicit .disabled() writes it.
     public var disabled: Bool?
+    /// .allowsHitTesting(false): touches and clicks pass through to whatever is behind,
+    /// as if the view weren't there, while it still draws. nil means inherit.
+    public var allowsHitTesting: Bool?
     /// nil means fill, which is what every modifier but .frame wants: a
     /// .padding() or .background() must not reposition what it wraps.
     public var alignment: Alignment?
@@ -196,7 +199,8 @@ public struct ModifierView: NativeComponent {
         borderWidth: Double? = nil,
         padding: EdgeInsets? = nil,
         alignment: Alignment? = nil,
-        disabled: Bool? = nil
+        disabled: Bool? = nil,
+        allowsHitTesting: Bool? = nil
     ) {
         self.content = content
         self.opacity = opacity
@@ -217,6 +221,7 @@ public struct ModifierView: NativeComponent {
         self.padding = padding
         self.alignment = alignment
         self.disabled = disabled
+        self.allowsHitTesting = allowsHitTesting
     }
 
     #if os(Linux)
@@ -268,9 +273,9 @@ public struct ModifierView: NativeComponent {
                 v.customForegroundColor = foregroundColor
                 v.customBorderColor = borderColor
                 v.customBorderWidth = borderWidth
-                if let disabled {
-                    Self.applyEnabled(!disabled, to: v)
-                    v.isClickThrough = disabled
+                if let disabled { Self.applyEnabled(!disabled, to: v) }
+                if disabled != nil || allowsHitTesting != nil {
+                    v.isClickThrough = disabled == true || allowsHitTesting == false
                 }
                 v.needsDisplay = true
 
@@ -283,6 +288,9 @@ public struct ModifierView: NativeComponent {
             if let bg = backgroundColor { view.backgroundColor = bg.uiColor }
             if let fg = foregroundColor { applyForegroundColor(fg, to: view) }
             if let disabled { Self.applyEnabled(!disabled, to: view) }
+            // The wrapper alone: UIKit skips it and its subtree, and hit-tests what's behind.
+            // Under .disabled, applyEnabled has already turned it off.
+            if let allowsHitTesting, disabled != true { view.isUserInteractionEnabled = allowsHitTesting }
             if let zIndex = zIndex { view.layer.zPosition = CGFloat(zIndex) }
             if let borderWidth {
                 view.layer.borderWidth = CGFloat(borderWidth)
@@ -311,6 +319,8 @@ public struct ModifierView: NativeComponent {
             applyCSS(cssDeclarations, to: view)
 
             if let disabled { gtk_widget_set_sensitive(view, disabled ? 0 : 1) }
+            // allowsHitTesting: GTK 3 can't pass input through a widget (GTK 4's can_target can).
+            // The content still takes its clicks there.
 
             if let p = padding {
                 let gtk_widget_set_margin_top: @convention(c) (NativeView, Int32) -> Void = fn(libgtk, "gtk_widget_set_margin_top")
@@ -408,6 +418,10 @@ public struct ModifierView: NativeComponent {
             }
             if let disabled {
                 omni_jni_call_void_method_bool(env, view, "setEnabled", disabled ? 0 : 1)
+            }
+            // The container refuses the touch, so its parent offers it to what's behind.
+            if let allowsHitTesting {
+                omni_jni_call_void_method_bool(env, view, "setPassThrough", allowsHitTesting ? 0 : 1)
             }
 
             // An unset axis is left as the parent generated it: forcing WRAP_CONTENT
@@ -748,6 +762,11 @@ public struct BackgroundModifier: ViewModifier {
     public func body(content: Content) -> some View { ModifierView(content: content, backgroundColor: color) }
 }
 
+public struct HitTestingModifier: ViewModifier {
+    public var enabled: Bool
+    public func body(content: Content) -> some View { ModifierView(content: content, allowsHitTesting: enabled) }
+}
+
 public struct DisabledModifier: ViewModifier {
     public var disabled: Bool
     public func body(content: Content) -> some View { ModifierView(content: content, disabled: disabled) }
@@ -801,6 +820,12 @@ public extension View {
 
     func background(_ color: Color) -> ModifiedContent<Self, BackgroundModifier> {
         self.modifier(BackgroundModifier(color: color))
+    }
+
+    /// false: the view draws, but touches and clicks go through it to what's behind, as
+    /// SwiftUI's. For art or labels laid over a control. Not on Linux (GTK 3).
+    func allowsHitTesting(_ enabled: Bool) -> ModifiedContent<Self, HitTestingModifier> {
+        self.modifier(HitTestingModifier(enabled: enabled))
     }
 
     func disabled(_ isDisabled: Bool = true) -> ModifiedContent<Self, DisabledModifier> {

@@ -29,10 +29,11 @@ enum AndroidModifierState {
 }
 
 extension OmniAndroid {
-    /// A plain FrameLayout, the container modifier views wrap their content in.
+    /// A FrameLayout, the container modifier views wrap their content in. It can let
+    /// touches through, for .allowsHitTesting(false) (OmniEventBridge.OmniContainer).
     @MainActor
     static func makeContainer() -> NativeView {
-        createView(getEnv(), "android/widget/FrameLayout")
+        createView(getEnv(), "com/omni/OmniEventBridge$OmniContainer")
     }
 
     @MainActor

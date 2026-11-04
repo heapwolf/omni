@@ -119,7 +119,8 @@ extension TextEditor {
                 if tv.textColor == nil || tv.textColor == .black { tv.textColor = .label }
                 tv.textContainerInset = plain ? .zero : UIEdgeInsets(top: 8, left: 0, bottom: 8, right: 0)
                 tv.textContainer.lineFragmentPadding = plain ? 0 : 5
-                if let font = Tracker.current?.environment.font { tv.font = font.uiFont }
+                // Only when it changes: set while typed into, it reloads the keyboard.
+                if let font = Tracker.current?.environment.font?.uiFont, tv.font != font { tv.font = font }
                 let focus = focusBinding
                 tv.onFocus = { isFocused in
                     if focus?.wrappedValue != isFocused { focus?.wrappedValue = isFocused }
