@@ -1423,6 +1423,8 @@ public class OmniEventBridge {
     }
 
     public static void setImage(ImageView view, String name, boolean isSystem) {
+        // Not the bytes setImageBytes kept: the same ones again must decode.
+        view.setTag(null);
         Context ctx = view.getContext();
 
         int edge = Math.round(SYMBOL_SIZE_DP * ctx.getResources().getDisplayMetrics().density);
@@ -2170,11 +2172,15 @@ public class OmniEventBridge {
         @Override public int getOpacity() { return android.graphics.PixelFormat.TRANSLUCENT; }
     }
 
+    /// Decodes only bytes it doesn't already show. Every render passed them, and a picture
+    /// behind a swipe decoded on each frame. The scale is setImageScale's: set here too, it
+    /// undid a fill each render, and a filled picture drew fitted.
     public static void setImageBytes(ImageView view, byte[] data) {
+        if (view.getTag() instanceof byte[] && java.util.Arrays.equals((byte[]) view.getTag(), data)) return;
         Bitmap bitmap = BitmapFactory.decodeByteArray(data, 0, data.length);
         if (bitmap != null) {
-            view.setScaleType(ImageView.ScaleType.FIT_CENTER);
             view.setImageBitmap(bitmap);
+            view.setTag(data);
         }
     }
 
