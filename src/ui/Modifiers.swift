@@ -431,10 +431,11 @@ public struct ModifierView: NativeComponent {
             // keypad row, and the 0 and delete keys beside it got none.
             let stackAxis = omni_jni_parent_orientation(env, view)
             let fillWidth = fillsWidth && stackAxis != 0, fillHeight = fillsHeight && stackAxis != 1
-            omni_jni_set_layout_params(
+            // As floats, rounded to the pixel: cut to whole points, a screen-wide page fell short.
+            omni_jni_set_layout_size(
                 env, view,
-                width.map { Int32($0) } ?? Int32(fillWidth ? MATCH_PARENT : OMNI_LAYOUT_KEEP),
-                height.map { Int32($0) } ?? Int32(fillHeight ? MATCH_PARENT : OMNI_LAYOUT_KEEP))
+                width.map { Float($0) } ?? Float(fillWidth ? MATCH_PARENT : OMNI_LAYOUT_KEEP),
+                height.map { Float($0) } ?? Float(fillHeight ? MATCH_PARENT : OMNI_LAYOUT_KEEP))
 
             if minWidth != nil || minHeight != nil {
                 omni_jni_set_minimum_size(env, view, Float(minWidth ?? 0), Float(minHeight ?? 0))

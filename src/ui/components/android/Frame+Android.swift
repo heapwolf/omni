@@ -20,9 +20,10 @@ extension Frame {
 
         // 1. Apply Layout Constraints. An unset axis is left as the parent
         // generated it; see ModifierView.
-        omni_jni_set_layout_params(env, view,
-                                   width.map { Int32($0) } ?? Int32(OMNI_LAYOUT_KEEP),
-                                   height.map { Int32($0) } ?? Int32(OMNI_LAYOUT_KEEP))
+        // As floats, rounded to the pixel (see omni_jni_set_layout_size).
+        omni_jni_set_layout_size(env, view,
+                                 width.map { Float($0) } ?? Float(OMNI_LAYOUT_KEEP),
+                                 height.map { Float($0) } ?? Float(OMNI_LAYOUT_KEEP))
         AndroidExpansion.pin(view, width: width != nil, height: height != nil)
 
         // 2. Map Gestures & Retain Handlers

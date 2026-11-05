@@ -115,6 +115,9 @@ public class OmniEventBridge {
     public static native void dispatchSafeArea(float top, float bottom);
     /// Appearance: the system's light or dark changed (MainActivity handles uiMode itself).
     public static native void dispatchAppearance();
+    /// The screen's density changed (Display size / Screen zoom): every size set in pixels
+    /// is stale, and the native side converts with the old density. See RootHost.
+    public static native void dispatchDensity();
 
     /// The system's dark mode, for Appearance when the app follows the system.
     /// The app's scheme (Appearance.current), which may differ from the system's.
@@ -124,6 +127,11 @@ public class OmniEventBridge {
         if (dark == darkScheme) return;
         darkScheme = dark;
         if (rootHost != null) rootHost.requestLayout();
+    }
+
+    /// The screen's width in points, for Display.width.
+    public static int screenWidthDp(Context context) {
+        return context.getResources().getConfiguration().screenWidthDp;
     }
 
     public static boolean isNightMode(Context context) {
@@ -948,7 +956,10 @@ public class OmniEventBridge {
             // scroll would clamp short of it, so it waits for a layout where it reaches.
             View content = view.getChildCount() > 0 ? view.getChildAt(0) : null;
             int extent = content == null ? 0 : horizontal ? content.getWidth() : content.getHeight();
-            if (page > 0 && extent < to + length()) { pending = page; return; }
+            // Short of it by a few pixels (pages sized in points, rounded), it goes as far as the
+            // content does: waiting, the last page was never reached, and a swipe to it stuck.
+            if (page > 0 && extent < to + length() / 2) { pending = page; return; }
+            to = Math.max(0, Math.min(to, extent - length()));
             int x = horizontal ? to : 0, y = horizontal ? 0 : to;
             if (!animated) { view.scrollTo(x, y); return; }
             if (horizontal) ((HorizontalScrollView) view).smoothScrollTo(x, y);
@@ -1011,8 +1022,6 @@ public class OmniEventBridge {
             if (target != shown) {
                 shown = target;
                 if (pagePtr != 0) dispatchInt(pagePtr, target);
-                Log.i("OmniLayout", "settled on page " + target + " at " + dp(view, offset()));
-                dumpTree(view.getRootView());
             }
         }
 
@@ -1513,7 +1522,20 @@ public class OmniEventBridge {
                 shaped = shaped instanceof ViewGroup && ((ViewGroup) shaped).getChildCount() > 0
                     ? ((ViewGroup) shaped).getChildAt(0) : null;
             }
-            lift(shaped != null ? shaped : content, Color.alpha(color) == 0 ? 0 : elevation, color, container);
+            View lifted = shaped != null ? shaped : content;
+            float height = Color.alpha(color) == 0 ? 0 : elevation;
+            lift(lifted, height, color, container);
+            // What's drawn after it, up to the container, at its height too: raised, it drew over
+            // its later siblings (the clock on a result screen's medallion, under its circle). At
+            // the same height they keep their order. Only the unshaped, so none casts a shadow.
+            for (View child = lifted; child != container && child.getParent() instanceof ViewGroup; ) {
+                ViewGroup parent = (ViewGroup) child.getParent();
+                for (int i = parent.indexOfChild(child) + 1; i < parent.getChildCount(); i++) {
+                    View sibling = parent.getChildAt(i);
+                    if (!hasOutline(sibling) && sibling.getElevation() < height) sibling.setElevation(height);
+                }
+                child = parent;
+            }
         });
     }
 
@@ -1800,6 +1822,7 @@ public class OmniEventBridge {
     public static void haptic(int kind) {
         View view = anyView();
         if (view == null) return;
+        if (kind == 1 && celebrate(view)) return;
         int constant;
         switch (kind) {
             case 1: constant = android.os.Build.VERSION.SDK_INT >= 30
@@ -1814,6 +1837,35 @@ public class OmniEventBridge {
             default: constant = android.view.HapticFeedbackConstants.VIRTUAL_KEY; break;
         }
         view.performHapticFeedback(constant);
+    }
+
+    /// A success, felt: a light click and a full one after it, where the phone has the
+    /// primitives, else two short pulses. CONFIRM alone was one faint click on many phones (a
+    /// Samsung's), and a sent payment didn't feel like anything. False when it can't (no vibrator,
+    /// touch feedback off), for the plain constant.
+    private static boolean celebrate(View view) {
+        Context context = view.getContext();
+        if (android.provider.Settings.System.getInt(context.getContentResolver(),
+                android.provider.Settings.System.HAPTIC_FEEDBACK_ENABLED, 1) == 0) return true;
+        android.os.Vibrator vibrator = context.getSystemService(android.os.Vibrator.class);
+        if (vibrator == null || !vibrator.hasVibrator()) return false;
+        try {
+            android.os.VibrationEffect effect;
+            if (android.os.Build.VERSION.SDK_INT >= 30 && vibrator.areAllPrimitivesSupported(
+                    android.os.VibrationEffect.Composition.PRIMITIVE_CLICK)) {
+                effect = android.os.VibrationEffect.startComposition()
+                    .addPrimitive(android.os.VibrationEffect.Composition.PRIMITIVE_CLICK, 0.5f)
+                    .addPrimitive(android.os.VibrationEffect.Composition.PRIMITIVE_CLICK, 1f, 70)
+                    .compose();
+            } else {
+                effect = android.os.VibrationEffect.createWaveform(
+                    new long[] { 0, 18, 70, 30 }, new int[] { 0, 140, 0, 255 }, -1);
+            }
+            vibrator.vibrate(effect);
+            return true;
+        } catch (RuntimeException e) {
+            return false;
+        }
     }
 
     /// The window's content: drawn edge to edge, under the status and navigation
@@ -1926,8 +1978,12 @@ public class OmniEventBridge {
         private int topColor = Color.WHITE;
         private int bottomColor = Color.WHITE;
 
+        /// The density the views were last laid out at.
+        private int densityDpi;
+
         public RootHost(Context context) {
             super(context);
+            densityDpi = context.getResources().getConfiguration().densityDpi;
             setWillNotDraw(false);
             // A BleedLayout's child reaches into the padding.
             setClipToPadding(false);
@@ -1936,8 +1992,21 @@ public class OmniEventBridge {
 
         /// Dark mode switched in the system's settings: the app re-renders in it if it
         /// follows the system. Reached because the manifest takes uiMode changes itself.
+        /// The display size changed too, kept by the manifest so the engine isn't started
+        /// again: with the old density kept natively, what was drawn and where a touch
+        /// landed disagreed, and taps and drags missed (the tab bar). Re-rendered in the new.
         @Override protected void onConfigurationChanged(android.content.res.Configuration config) {
             super.onConfigurationChanged(config);
+            if (config.densityDpi != densityDpi) {
+                densityDpi = config.densityDpi;
+                dispatchDensity();
+                // Laid out again, every view: the screen is as many pixels as before, so a view
+                // whose bounds didn't change wasn't, and its size listener (a GeometryReader's)
+                // never told the new size in points. The intro kept paging at the old width, and
+                // its pages slid out of line with the screen.
+                relayoutTree(this);
+                requestLayout();
+            }
             dispatchAppearance();
         }
 
@@ -2022,6 +2091,15 @@ public class OmniEventBridge {
                               MeasureSpec.makeMeasureSpec(height, MeasureSpec.EXACTLY));
                 child.layout(-extLeft, -extTop, w + extRight, h + extBottom);
             }
+        }
+    }
+
+    /// Marks `view` and everything in it to be laid out on the next pass, changed or not.
+    static void relayoutTree(View view) {
+        view.forceLayout();
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) relayoutTree(group.getChildAt(i));
         }
     }
 

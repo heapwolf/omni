@@ -403,6 +403,10 @@ extension ScrollView {
         // Matches plain SwiftUI's own default: dragging the scroll view
         // dismisses an active keyboard interactively, tracking the drag.
         sv.keyboardDismissMode = .interactive
+        // Bounces along its axis even when everything fits, as SwiftUI's
+        // ScrollView does; without it a short list can't be pulled to refresh.
+        sv.alwaysBounceVertical = axis == .vertical
+        sv.alwaysBounceHorizontal = axis == .horizontal
         // No inset of UIKit's own: a scroll view laid under the status bar or
         // home indicator (.ignoresSafeArea) runs its content where it is put,
         // as on Android, rather than gaining the safe area again on top of

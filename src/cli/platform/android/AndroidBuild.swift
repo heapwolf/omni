@@ -1411,16 +1411,20 @@ public struct AndroidBuilder {
             <!-- Approval keys. -->
             <uses-permission android:name="android.permission.USE_BIOMETRIC" />
 
+            <!-- Haptics with a shape (a success's two pulses): granted at install, no prompt. -->
+            <uses-permission android:name="android.permission.VIBRATE" />
+
             <application android:label="\(appName(product: product))"
                          android:theme="@android:style/Theme.DeviceDefault.Light.NoActionBar"
                          android:extractNativeLibs="true"
                          android:debuggable="true"
                          android:usesCleartextTraffic="true"\(iconAttr)>
-                <!-- configChanges: rotating, resizing, a keyboard coming and going, or dark mode
-                     keeps the activity. Recreating it would start the engine
-                     again; omni lays the root out at the new size instead. -->
+                <!-- configChanges: rotating, resizing, a keyboard coming and going, dark mode,
+                     or the display size or font size changing keeps the activity. Recreating
+                     it would start the engine again; omni lays the root out at the new size
+                     instead, and at a new density re-renders it in the new pixels. -->
                 <activity android:name="\(packageName(for: product)).MainActivity" android:exported="true"
-                          android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode"\(launchMode())>
+                          android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density|fontScale"\(launchMode())>
                     <intent-filter>
                         <action android:name="android.intent.action.MAIN" />
                         <category android:name="android.intent.category.LAUNCHER" />

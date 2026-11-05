@@ -127,4 +127,14 @@ public extension View {
 public func omni_swift_appearance_changed() {
     MainActor.assumeIsolated { Appearance.refresh() }
 }
+
+/// The display size changed (OmniEventBridge.RootHost): everything again, in the new pixels.
+/// Each node's update sets its sizes, paddings and fonts, converted at the new density.
+@_cdecl("omni_swift_density_changed")
+public func omni_swift_density_changed() {
+    MainActor.assumeIsolated {
+        Display.forget()
+        if let root = Engine.root { Engine.render(root) }
+    }
+}
 #endif

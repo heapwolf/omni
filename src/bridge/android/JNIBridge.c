@@ -344,9 +344,30 @@ void omni_jni_move_child(JNIEnv *env, jobject parent, jobject child, int index) 
     (*env)->DeleteLocalRef(env, viewGroupClass);
 }
 
+static void omni_jni_apply_layout_params(JNIEnv *env, jobject view, int width, int height);
+
 void omni_jni_set_layout_params(JNIEnv *env, jobject view, int width, int height) {
-    width = omni_jni_px(env, width);
-    height = omni_jni_px(env, height);
+    omni_jni_apply_layout_params(env, view, omni_jni_px(env, width), omni_jni_px(env, height));
+}
+
+/// Points as the float they are, to the nearest pixel. Cut to whole points first, a page a
+/// screen wide (352.65 points at a large display size) came out 2 pixels short of the screen,
+/// and four of them too short for the pager to reach the last.
+static int omni_jni_px_exact(JNIEnv *env, float points) {
+    int whole = (int)points;
+    if ((float)whole == points && (whole == MATCH_PARENT || whole == WRAP_CONTENT
+                                   || whole == OMNI_LAYOUT_KEEP || whole == 0)) {
+        return whole;
+    }
+    return (int)(points * omni_jni_density(env) + 0.5f);
+}
+
+void omni_jni_set_layout_size(JNIEnv *env, jobject view, float width, float height) {
+    omni_jni_apply_layout_params(env, view, omni_jni_px_exact(env, width), omni_jni_px_exact(env, height));
+}
+
+/// `width` and `height` in pixels, or MATCH_PARENT, WRAP_CONTENT or OMNI_LAYOUT_KEEP.
+static void omni_jni_apply_layout_params(JNIEnv *env, jobject view, int width, int height) {
 
     jclass viewClass = (*env)->GetObjectClass(env, view);
     jmethodID setLayoutParams = (*env)->GetMethodID(env, viewClass, "setLayoutParams",
@@ -1066,6 +1087,31 @@ void omni_jni_set_image_bytes(JNIEnv *env, jobject view, const uint8_t* data, in
         omni_jni_clear_pending(env);
     }
     (*env)->DeleteLocalRef(env, bridgeClass);
+}
+
+// OmniVideoView.setVideo: the bytes copied into a Java array once, when they change.
+void omni_jni_set_video_bytes(JNIEnv *env, jobject view, const uint8_t* data, int length) {
+    jclass viewClass = (*env)->GetObjectClass(env, view);
+    jmethodID method = (*env)->GetMethodID(env, viewClass, "setVideo", "([B)V");
+    if (method) {
+        jbyteArray jData = (*env)->NewByteArray(env, length);
+        if (jData) {
+            (*env)->SetByteArrayRegion(env, jData, 0, length, (const jbyte*)data);
+            (*env)->CallVoidMethod(env, view, method, jData);
+            (*env)->DeleteLocalRef(env, jData);
+        }
+    }
+    omni_jni_clear_pending(env);
+    (*env)->DeleteLocalRef(env, viewClass);
+}
+
+// OmniVideoView.setEndHandler: the Swift handler told at the video's end, or NULL for none.
+void omni_jni_video_set_end(JNIEnv *env, jobject view, void* ptr) {
+    jclass viewClass = (*env)->GetObjectClass(env, view);
+    jmethodID method = (*env)->GetMethodID(env, viewClass, "setEndHandler", "(J)V");
+    if (method) (*env)->CallVoidMethod(env, view, method, (jlong)ptr);
+    omni_jni_clear_pending(env);
+    (*env)->DeleteLocalRef(env, viewClass);
 }
 
 static void omni_jni_resolve_axis(JNIEnv *env, jobject params, jfieldID field, int fills) {
@@ -2090,6 +2136,14 @@ JNIEXPORT void JNICALL Java_com_omni_OmniEventBridge_dispatchActivity(JNIEnv *en
     omni_swift_user_activity();
 }
 
+extern void omni_swift_density_changed(void);
+
+/// The display size changed: converted again from the screen's density, then laid out anew.
+JNIEXPORT void JNICALL Java_com_omni_OmniEventBridge_dispatchDensity(JNIEnv *env, jclass clazz) {
+    omni_density = 0.0f;
+    omni_swift_density_changed();
+}
+
 extern void omni_swift_appearance_changed(void);
 
 JNIEXPORT void JNICALL Java_com_omni_OmniEventBridge_dispatchAppearance(JNIEnv *env, jclass clazz) {
@@ -2105,6 +2159,18 @@ int omni_jni_is_night_mode(JNIEnv *env) {
     omni_jni_clear_pending(env);
     (*env)->DeleteLocalRef(env, bridgeClass);
     return night ? 1 : 0;
+}
+
+// The screen's width in points (Configuration.screenWidthDp): new with each display size.
+int omni_jni_screen_width(JNIEnv *env) {
+    if (!global_activity) return 0;
+    jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
+    if (!bridgeClass) return 0;
+    jmethodID m = (*env)->GetStaticMethodID(env, bridgeClass, "screenWidthDp", "(Landroid/content/Context;)I");
+    jint width = m ? (*env)->CallStaticIntMethod(env, bridgeClass, m, global_activity) : 0;
+    omni_jni_clear_pending(env);
+    (*env)->DeleteLocalRef(env, bridgeClass);
+    return width;
 }
 
 extern void omni_swift_safe_area(float top, float bottom);

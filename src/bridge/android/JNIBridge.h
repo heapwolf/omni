@@ -38,6 +38,8 @@ void omni_jni_animate_replacement(JNIEnv *env, jobject scene_root, jobject paren
                                   float in_x, float in_y, int in_fade, float in_scale,
                                   float out_x, float out_y, int out_fade, float out_scale);
 void omni_jni_set_layout_params(JNIEnv *env, jobject view, int width, int height);
+/// The same, in points as floats: rounded to the pixel, not cut to the point.
+void omni_jni_set_layout_size(JNIEnv *env, jobject view, float width, float height);
 void omni_jni_set_linear_layout_params(JNIEnv *env, jobject view, int width, int height, float weight);
 /// The orientation of the stack holding `view` (0 across, 1 down), or -1 if it isn't in one.
 int omni_jni_parent_orientation(JNIEnv *env, jobject view);
@@ -68,6 +70,7 @@ void omni_jni_attach_focus_change(JNIEnv *env, jobject view, void* swift_ptr);
 void omni_jni_focus_field(JNIEnv *env, jobject view, int focus);
 /// 1 when the system is in dark mode.
 int omni_jni_is_night_mode(JNIEnv *env);
+int omni_jni_screen_width(JNIEnv *env);
 /// Image's content mode: 1 crops to fill the view, 0 fits it whole.
 void omni_jni_set_image_scale(JNIEnv *env, jobject view, int fill);
 /// .shadow: elevation (points) on the container's content, the container left flat.
@@ -101,6 +104,8 @@ void omni_jni_set_image(JNIEnv *env, jobject view, const char* name, int isSyste
 /// In-memory counterpart: decodes `data` rather than resolving a resource name,
 /// for Image(data:).
 void omni_jni_set_image_bytes(JNIEnv *env, jobject view, const uint8_t* data, int length);
+void omni_jni_set_video_bytes(JNIEnv *env, jobject view, const uint8_t* data, int length);
+void omni_jni_video_set_end(JNIEnv *env, jobject view, void* ptr);
 void omni_jni_tint_symbols(JNIEnv *env, jobject view, int a, int r, int g, int b);
 void omni_jni_set_autofill_hint(JNIEnv *env, jobject view, const char* hint);
 void omni_jni_set_stroke(JNIEnv *env, jobject view, int kind, float radius, float width,
