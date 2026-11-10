@@ -302,22 +302,26 @@ void omni_jni_remove_view(JNIEnv *env, jobject child) {
 }
 
 // A replaced view's insertion and removal; see OmniEventBridge.animateReplacement.
-// `arriving` or `leaving` may be NULL.
+// `arriving` or `leaving` may be NULL. x and y are fractions of the parent's size; dx and dy
+// are points (an .offset transition's), made pixels here.
 void omni_jni_animate_replacement(JNIEnv *env, jobject scene_root, jobject parent, jobject arriving,
                                   jobject leaving, int duration_ms, int curve,
                                   float in_x, float in_y, int in_fade, float in_scale,
-                                  float out_x, float out_y, int out_fade, float out_scale) {
+                                  float out_x, float out_y, int out_fade, float out_scale,
+                                  float in_dx, float in_dy, float out_dx, float out_dy) {
     jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");
     if (!bridgeClass) {
         omni_jni_clear_pending(env);
         return;
     }
     jmethodID method = (*env)->GetStaticMethodID(env, bridgeClass, "animateReplacement",
-        "(Landroid/view/ViewGroup;Landroid/view/ViewGroup;Landroid/view/View;Landroid/view/View;JIFFZFFFZF)V");
+        "(Landroid/view/ViewGroup;Landroid/view/ViewGroup;Landroid/view/View;Landroid/view/View;JIFFZFFFZFFFFF)V");
     if (method) {
         (*env)->CallStaticVoidMethod(env, bridgeClass, method, scene_root, parent, arriving, leaving,
                                      (jlong)duration_ms, curve, in_x, in_y, (jboolean)in_fade, in_scale,
-                                     out_x, out_y, (jboolean)out_fade, out_scale);
+                                     out_x, out_y, (jboolean)out_fade, out_scale,
+                                     omni_jni_pxf(env, in_dx), omni_jni_pxf(env, in_dy),
+                                     omni_jni_pxf(env, out_dx), omni_jni_pxf(env, out_dy));
     }
     omni_jni_clear_pending(env);
     (*env)->DeleteLocalRef(env, bridgeClass);

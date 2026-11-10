@@ -36,7 +36,8 @@ void omni_jni_move_child(JNIEnv *env, jobject parent, jobject child, int index);
 void omni_jni_animate_replacement(JNIEnv *env, jobject scene_root, jobject parent, jobject arriving,
                                   jobject leaving, int duration_ms, int curve,
                                   float in_x, float in_y, int in_fade, float in_scale,
-                                  float out_x, float out_y, int out_fade, float out_scale);
+                                  float out_x, float out_y, int out_fade, float out_scale,
+                                  float in_dx, float in_dy, float out_dx, float out_dy);
 void omni_jni_set_layout_params(JNIEnv *env, jobject view, int width, int height);
 /// The same, in points as floats: rounded to the pixel, not cut to the point.
 void omni_jni_set_layout_size(JNIEnv *env, jobject view, float width, float height);

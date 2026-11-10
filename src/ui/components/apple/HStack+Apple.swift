@@ -60,7 +60,9 @@ extension HStack {
         Self.tieSpacerWidths(in: stack)
     }
 
-    @MainActor private static func tieSpacerWidths(in stack: NativeStack) {
+    /// Also FrameModifier's, when a child's claim changes after this ran: a stack updates
+    /// before its children render, so it saw the claim they had.
+    @MainActor static func tieSpacerWidths(in stack: NativeStack) {
         let existingConstraints = stack.constraints.filter { $0.identifier == "omni-spacer-eq" }
         NSLayoutConstraint.deactivate(existingConstraints)
 

@@ -935,6 +935,9 @@ public class OmniEventBridge {
         long pagePtr, sizePtr, contentPtr;
         boolean paging, disabled;
         int shown = -1, pending = -1;
+        /// The content's length at the last layout, and whether a finger is down.
+        int extent = -1;
+        boolean touching;
         VelocityTracker tracker;
 
         Paging(ViewGroup view, boolean horizontal) { this.view = view; this.horizontal = horizontal; }
@@ -976,8 +979,11 @@ public class OmniEventBridge {
 
         /// Every event, before the scroll view or a child sees it.
         void track(MotionEvent e) {
+            int action = e.getActionMasked();
+            if (action == MotionEvent.ACTION_DOWN) touching = true;
+            else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) touching = false;
             if (!paging) return;
-            if (e.getActionMasked() == MotionEvent.ACTION_DOWN) {
+            if (action == MotionEvent.ACTION_DOWN) {
                 if (tracker != null) tracker.recycle();
                 tracker = VelocityTracker.obtain();
             }
@@ -1061,6 +1067,13 @@ public class OmniEventBridge {
         /// kept through a new size, and the sizes told to Swift.
         void laidOut(boolean resized) {
             if (length() == 0) return;
+            // The pages resized inside a scroll view that didn't: a new display size keeps the
+            // screen's pixels and re-renders the pages at the new density. Not put back on the page
+            // shown, the pager stayed between two, and the next swipe settled out of line.
+            View pages = view.getChildCount() > 0 ? view.getChildAt(0) : null;
+            int now = pages == null ? 0 : horizontal ? pages.getWidth() : pages.getHeight();
+            if (extent >= 0 && now != extent && !touching) resized = true;
+            extent = now;
             if (pending >= 0) {
                 int page = pending;
                 pending = -1;
@@ -1208,16 +1221,19 @@ public class OmniEventBridge {
 
     /// TransitionAnimator's counterpart: `arriving` has just replaced `leaving`
     /// in `parent`. The arriving view starts off by (inX, inY) of the parent's
-    /// size, transparent, or scaled by inScale about its centre, and animates
-    /// in. The leaving view is drawn in the parent's overlay, where a removed
-    /// view stays visible, animates out by (outX, outY) and outScale, and is
-    /// let go. The root's AutoTransition would animate the
-    /// same change its own way, so it is ended first.
+    /// size plus (inDx, inDy) pixels, transparent, or scaled by inScale about its
+    /// centre, and animates in. The leaving view is drawn in the parent's
+    /// overlay, where a removed view stays visible, animates out by (outX, outY)
+    /// and (outDx, outDy), and outScale, and is let go. The root's AutoTransition
+    /// would animate the same change its own way, so it is ended first.
+    /// Each ends where it was: its own alpha, scale and translation (an
+    /// .opacity, .scaleEffect or .offset) stay, not 1, 1 and 0.
     public static void animateReplacement(ViewGroup sceneRoot, ViewGroup parent, View arriving,
                                           final View leaving, long durationMs, int curve,
                                           float inX, float inY, boolean inFade, float inScale,
                                           final float outX, final float outY, final boolean outFade,
-                                          final float outScale) {
+                                          final float outScale,
+                                          float inDx, float inDy, final float outDx, final float outDy) {
         int width = parent.getWidth();
         int height = parent.getHeight();
         if (width == 0 || height == 0) return;
@@ -1225,28 +1241,35 @@ public class OmniEventBridge {
         android.animation.TimeInterpolator easing = interpolator(curve);
 
         if (arriving != null) {
-            arriving.setTranslationX(inX * width);
-            arriving.setTranslationY(inY * height);
+            float x = arriving.getTranslationX(), y = arriving.getTranslationY();
+            float alpha = arriving.getAlpha();
+            float sx = arriving.getScaleX(), sy = arriving.getScaleY();
+            arriving.animate().cancel();
+            arriving.setTranslationX(x + inX * width + inDx);
+            arriving.setTranslationY(y + inY * height + inDy);
             if (inFade) arriving.setAlpha(0f);
-            arriving.setScaleX(inScale);
-            arriving.setScaleY(inScale);
-            arriving.animate().translationX(0f).translationY(0f).alpha(1f).scaleX(1f).scaleY(1f)
+            arriving.setScaleX(sx * inScale);
+            arriving.setScaleY(sy * inScale);
+            arriving.animate().translationX(x).translationY(y).alpha(alpha).scaleX(sx).scaleY(sy)
                 .setDuration(durationMs).setInterpolator(easing).start();
         }
 
         if (leaving != null && leaving.getParent() == null) {
             final android.view.ViewGroupOverlay overlay = parent.getOverlay();
+            final float x = leaving.getTranslationX(), y = leaving.getTranslationY();
+            final float alpha = leaving.getAlpha();
+            final float sx = leaving.getScaleX(), sy = leaving.getScaleY();
             overlay.add(leaving);
-            leaving.animate().translationX(outX * width).translationY(outY * height)
-                .alpha(outFade ? 0f : 1f).scaleX(outScale).scaleY(outScale)
+            leaving.animate().translationX(x + outX * width + outDx).translationY(y + outY * height + outDy)
+                .alpha(outFade ? 0f : alpha).scaleX(sx * outScale).scaleY(sy * outScale)
                 .setDuration(durationMs).setInterpolator(easing)
                 .withEndAction(() -> {
                     overlay.remove(leaving);
-                    leaving.setTranslationX(0f);
-                    leaving.setTranslationY(0f);
-                    leaving.setAlpha(1f);
-                    leaving.setScaleX(1f);
-                    leaving.setScaleY(1f);
+                    leaving.setTranslationX(x);
+                    leaving.setTranslationY(y);
+                    leaving.setAlpha(alpha);
+                    leaving.setScaleX(sx);
+                    leaving.setScaleY(sy);
                 })
                 .start();
         }

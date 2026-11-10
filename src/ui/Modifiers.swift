@@ -369,9 +369,18 @@ public struct ModifierView: NativeComponent {
                 c.identifier = "Mod-Height"
                 c.isActive = true
             }
+            // Set either way: a frame that stopped filling (maxWidth .infinity, then nil) kept
+            // its claim and went on taking a stack's surplus. 250 is the wrapper's own default.
             let claim = NativeLayoutPriority(rawValue: 1)
-            if fillsWidth { view.setContentHuggingPriority(claim, for: .horizontal) }
-            if fillsHeight { view.setContentHuggingPriority(claim, for: .vertical) }
+            let hug = NativeLayoutPriority(rawValue: 250)
+            let claimed = view.contentHuggingPriority(for: .horizontal).rawValue <= 1
+            view.setContentHuggingPriority(fillsWidth ? claim : hug, for: .horizontal)
+            view.setContentHuggingPriority(fillsHeight ? claim : hug, for: .vertical)
+            // A row ties its fills' widths when it updates, before this did: tie again, or
+            // a frame that stopped filling stayed the same width as one that still fills.
+            if claimed != fillsWidth, let row = view.superview as? NativeStack, row.isHorizontalRow {
+                HStack.tieSpacerWidths(in: row)
+            }
 
             // The child's place is insertChild's, made once: a kept child, its
             // padding or frame changed since, stayed where it was. A screen

@@ -786,7 +786,8 @@ public struct EmptyView: OmniStructuralView {
                                      old == child.native ? nil : old,
                                      Int32(animation.duration * 1000), animation.androidCurve,
                                      arriving.x, arriving.y, arriving.fades ? 1 : 0, arriving.scale,
-                                     leaving.x, leaving.y, leaving.fades ? 1 : 0, leaving.scale)
+                                     leaving.x, leaving.y, leaving.fades ? 1 : 0, leaving.scale,
+                                     arriving.dx, arriving.dy, leaving.dx, leaving.dy)
     }
 
     /// A transition as Android animates it: an offset, in fractions of the
@@ -795,6 +796,9 @@ public struct EmptyView: OmniStructuralView {
     private struct AndroidMotion {
         var x: Float = 0
         var y: Float = 0
+        /// An .offset's, in points.
+        var dx: Float = 0
+        var dy: Float = 0
         var fades = false
         var scale: Float = 1
 
@@ -802,6 +806,8 @@ public struct EmptyView: OmniStructuralView {
             switch kind {
             case .identity: break
             case .opacity: fades = true
+            // A move in points, beside the fractions; the bridge makes them pixels.
+            case .offset(let x, let y): dx = Float(x); dy = Float(y)
             // Never quite zero, as on iOS.
             case .scale(let s): scale = Float(max(s, 0.001))
             case .move(let edge):
@@ -815,6 +821,8 @@ public struct EmptyView: OmniStructuralView {
                 let first = AndroidMotion(a), second = AndroidMotion(b)
                 x = first.x + second.x
                 y = first.y + second.y
+                dx = first.dx + second.dx
+                dy = first.dy + second.dy
                 fades = first.fades || second.fades
                 scale = first.scale * second.scale
             case .asymmetric(let insertion, _):

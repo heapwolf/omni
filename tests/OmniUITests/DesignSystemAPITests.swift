@@ -112,6 +112,41 @@ final class DesignSystemAPITests: XCTestCase {
         }
     }
 
+    /// A frame that stops filling gives the surplus back: a balance, one of two
+    /// `.frame(maxWidth: .infinity)` halves, tapped open while the other went to
+    /// `maxWidth: nil` to hug its symbol. The other kept its claim and its half.
+    func testAFrameThatStopsFillingHugsItsContent() {
+        MainActor.assumeIsolated {
+            @MainActor func row(_ open: Bool) -> some View {
+                HStack(spacing: 0) {
+                    Text("Dollars").frame(maxWidth: .infinity, alignment: .leading)
+                    Text("N").frame(maxWidth: open ? nil : .infinity, alignment: .leading)
+                }
+            }
+            let node = Node(row(false))
+            Engine.render(node)
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 100),
+                                  styleMask: [.borderless], backing: .buffered, defer: false)
+            let root = node.native!
+            window.contentView?.addSubview(root)
+            NSLayoutConstraint.activate([
+                root.topAnchor.constraint(equalTo: window.contentView!.topAnchor),
+                root.leadingAnchor.constraint(equalTo: window.contentView!.leadingAnchor),
+                root.trailingAnchor.constraint(equalTo: window.contentView!.trailingAnchor)
+            ])
+            window.contentView?.layoutSubtreeIfNeeded()
+            let half = Self.findAll(NSTextField.self, in: root)[1].superview!
+            XCTAssertEqual(half.frame.width, 200, accuracy: 1, "filling, the halves share")
+
+            node.adopt(row(true))
+            Engine.render(node)
+            window.contentView?.layoutSubtreeIfNeeded()
+            let hugging = Self.findAll(NSTextField.self, in: root)[1].superview!
+            XCTAssertLessThan(hugging.frame.width, 60, "no longer filling, it hugs its text")
+            _ = window
+        }
+    }
+
     /// SwiftUI centres text in a frame wider than it: a segmented control's
     /// two halves, each `.frame(maxWidth: .infinity)`. Stretched to the frame,
     /// the label drew its text at the leading edge.

@@ -24,6 +24,7 @@ public struct AnyTransition: Sendable {
         case identity
         case opacity
         case move(Edge)
+        case offset(x: Double, y: Double)
         case scale(Double)
         case asymmetric(insertion: Kind, removal: Kind)
         case combined(Kind, Kind)
@@ -37,6 +38,12 @@ public struct AnyTransition: Sendable {
                                                               removal: .move(.trailing)))
 
     public static func move(edge: Edge) -> AnyTransition { AnyTransition(kind: .move(edge)) }
+
+    /// SwiftUI's: arrives from, and leaves to, this far from its place, in points. A short
+    /// roll where .move would carry it the container's whole size.
+    public static func offset(x: Double = 0, y: Double = 0) -> AnyTransition {
+        AnyTransition(kind: .offset(x: x, y: y))
+    }
 
     /// SwiftUI's: grows in from, and shrinks out to, `scale` of its size.
     /// Android fades it instead, for now.
@@ -125,6 +132,8 @@ extension AnyTransition.Kind {
             case .top: view.transform = CGAffineTransform(translationX: 0, y: -size.height)
             case .bottom: view.transform = CGAffineTransform(translationX: 0, y: size.height)
             }
+        case .offset(let x, let y):
+            view.transform = CGAffineTransform(translationX: CGFloat(x), y: CGFloat(y))
         case .scale(let scale):
             // Never quite zero: a singular transform draws nothing to animate from.
             let s = CGFloat(max(scale, 0.001))
@@ -155,23 +164,36 @@ enum TransitionAnimator {
             old.isUserInteractionEnabled = false
             container.addSubview(old)
         }
+        // Where each ends up is its own: an .opacity(0) or .scaleEffect on the view stays.
+        // Brought to 1 and identity, a view meant to be unseen (a placeholder holding its
+        // place) showed once its transition ran.
+        let alpha = new?.alpha ?? 1, transform = new?.transform ?? .identity
+        let oldAlpha = old?.alpha ?? 1, oldTransform = old?.transform ?? .identity
         UIView.performWithoutAnimation {
             container.layoutIfNeeded()
             if let new { (insertion?.insertion ?? .opacity).apply(to: new, in: size) }
         }
+        // apply sets a transform outright; keep the view's own under it.
+        if let new { new.transform = transform.concatenating(new.transform) }
 
         animation.perform(options: .beginFromCurrentState, {
-            new?.transform = .identity
-            new?.alpha = 1
-            if let old { (removal?.removal ?? .opacity).apply(to: old, in: size) }
-        }, completion: { _ in
+            new?.transform = transform
+            new?.alpha = alpha
+            if let old {
+                (removal?.removal ?? .opacity).apply(to: old, in: size)
+                old.transform = oldTransform.concatenating(old.transform)
+            }
+        }, completion: { finished in
             // Whole, however it ended: an animation cut short by another left
-            // the new view part-scaled, part-faded.
-            new?.transform = .identity
-            new?.alpha = 1
+            // the new view part-scaled, part-faded. Only then: once finished it
+            // is where it should be, and a later render may since have moved it.
+            if !finished {
+                new?.transform = transform
+                new?.alpha = alpha
+            }
             old?.removeFromSuperview()
-            old?.transform = .identity
-            old?.alpha = 1
+            old?.transform = oldTransform
+            old?.alpha = oldAlpha
         })
     }
 }
