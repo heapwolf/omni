@@ -2,7 +2,8 @@
 import Foundation
 
 /// Per-platform icon sizes and containers, generated at build time from one
-/// source image. Uses sips and iconutil on macOS, ImageMagick elsewhere, plus a hand-rolled .ico packer.
+/// source image. Resized in Swift (PNG.swift), so nothing needs installing
+/// on any platform; iconutil and actool still pack Apple's containers.
 enum AppIcon {
     /// Where each size comes from.
     enum Source {
@@ -27,7 +28,7 @@ enum AppIcon {
         return .placeholder(name.first.map { Character($0.uppercased()) })
     }
 
-    /// Drawn at the requested size; sips is macOS-only, so there is no resample.
+    /// The source at the requested size: icon.png resampled, or the placeholder drawn.
     static func write(_ source: Source, size: Int, to output: String) throws {
         switch source {
         case .file(let path):
@@ -37,17 +38,19 @@ enum AppIcon {
         }
     }
 
-    /// Resizes via sips, macOS's built-in image tool, and ImageMagick elsewhere:
-    /// Android builds run on Linux too. `!` forces the exact size, as `sips -z` does.
+    /// icon.png at exactly `size` × `size`, as an RGBA PNG. A source that
+    /// isn't square is stretched, as the sips and ImageMagick resizes this
+    /// replaces did: an icon is drawn square.
     static func resize(_ source: String, to size: Int, output: String) throws {
-        #if os(macOS)
-            let command = "sips -z \(size) \(size) \(shellQuote(source)) --out \(shellQuote(output))"
-        #else
-            // ImageMagick 7 is `magick`; 6 only has `convert`.
-            let tool = (try? Shell.run("command -v magick"))?.isEmpty == false ? "magick" : "convert"
-            let command = "\(tool) \(shellQuote(source)) -resize \(size)x\(size)! \(shellQuote(output))"
-        #endif
-        _ = try Shell.checked(command, step: "resizing icon to \(size)x\(size)")
+        guard let data = FileManager.default.contents(atPath: source) else {
+            throw ShellError.failed("resizing icon to \(size)x\(size)", "can't read \(source)")
+        }
+        do {
+            let image = try PNG.decode(data)
+            try PNG.encode(image.resized(width: size, height: size)).write(to: URL(fileURLWithPath: output))
+        } catch let error as PNGError {
+            throw ShellError.failed("resizing icon to \(size)x\(size)", "\(source): \(error)")
+        }
     }
 
     // MARK: - iOS
