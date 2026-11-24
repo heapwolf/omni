@@ -3,9 +3,6 @@
 // before use, the bridge that calls it, and the manifest entries it needs.
 
 import Foundation
-#if canImport(CryptoKit)
-import CryptoKit
-#endif
 
 struct PlayIntegrityVendor {
     let jar: String
@@ -36,12 +33,8 @@ struct PlayIntegrityVendor {
         manifestEntries = lines + "\n        <meta-data android:name=\"omni.play_integrity.cloud_project\" android:value=\"project:\(project)\" />"
     }
 
+    /// In Swift on every platform (Digest.swift): no CryptoKit off Apple, and no sha256sum.
     static func sha256(_ data: Data, path: String) throws -> String {
-        #if canImport(CryptoKit)
-        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-        #else
-        let line = try Shell.checked("sha256sum \"\(path)\"", step: "hashing play-integrity.jar")
-        return String(line.split(separator: " ").first ?? "")
-        #endif
+        Digest.hex(Digest.sha256(data))
     }
 }

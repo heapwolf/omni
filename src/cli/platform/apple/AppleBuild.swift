@@ -259,15 +259,24 @@ public struct AppleBuilder {
         guard let data = FileManager.default.contents(atPath: profilePlist),
               let plist = try PropertyListSerialization.propertyList(
                 from: data, options: [], format: nil) as? [String: Any],
-              let certificate = (plist["DeveloperCertificates"] as? [Data])?.first else {
+              let certificates = plist["DeveloperCertificates"] as? [Data], !certificates.isEmpty else {
             throw NSError(domain: "AppleBuilder", code: 2, userInfo: [
                 NSLocalizedDescriptionKey: "The provisioning profile has no certificate."])
         }
 
-        let derPath = "\(scratch)/signing-certificate.der"
-        try certificate.write(to: URL(fileURLWithPath: derPath))
-        let line = try Shell.checked("shasum -a 1 \"\(derPath)\"", step: "fingerprinting the certificate")
-        return String(line.prefix(40))
+        // A profile can name several of the team's certificates: the one this
+        // Mac can sign with is the one whose identity is in its keychain.
+        let keychain = try Shell.checked("security find-identity -v -p codesigning", step: "listing signing identities")
+        var fingerprints: [String] = []
+        for certificate in certificates {
+            // The SHA-1 of the certificate's DER bytes, as find-identity prints it.
+            let fingerprint = Digest.hex(Digest.sha1(certificate), uppercase: true)
+            if keychain.contains(fingerprint) { return fingerprint }
+            fingerprints.append(fingerprint)
+        }
+        throw NSError(domain: "AppleBuilder", code: 3, userInfo: [
+            NSLocalizedDescriptionKey: "None of the provisioning profile's certificates is in this Mac's keychain "
+                + "(\(fingerprints.joined(separator: ", "))). Run omni provision, or use a profile that includes yours."])
     }
 
     // MARK: - iOS Simulator Build
