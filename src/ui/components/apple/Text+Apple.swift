@@ -48,6 +48,8 @@ final class OmniTextLabel: UILabel {
             isUserInteractionEnabled = isCopyable
             if isCopyable, press == nil {
                 let recognizer = UILongPressGestureRecognizer(target: self, action: #selector(longPressed(_:)))
+                // Touches not held back: see TapGesture+Apple.swift.
+                recognizer.delaysTouchesEnded = false
                 addGestureRecognizer(recognizer)
                 press = recognizer
                 if #available(iOS 16.0, *) {
@@ -234,7 +236,13 @@ extension Text {
             }
         }
 
-        if lineSpacing != 0 || tracking != 0 {
+        // A strikethrough taken off: stringValue is set only when the text
+        // changes, so the struck attributes would stay without this.
+        if !isStrikethrough, l.attributedStringValue.length > 0,
+           l.attributedStringValue.attribute(.strikethroughStyle, at: 0, effectiveRange: nil) != nil {
+            l.stringValue = text
+        }
+        if lineSpacing != 0 || tracking != 0 || isStrikethrough {
             l.attributedStringValue = spacedText(font: l.font, color: l.textColor,
                                                  alignment: l.alignment, lineBreak: l.lineBreakMode)
         }
@@ -300,7 +308,7 @@ extension Text {
             }
         }
 
-        if lineSpacing != 0 || tracking != 0 {
+        if lineSpacing != 0 || tracking != 0 || isStrikethrough {
             l.attributedText = spacedText(font: l.font, color: l.textColor,
                                           alignment: l.textAlignment, lineBreak: l.lineBreakMode)
         }
@@ -321,6 +329,16 @@ extension Text {
         if let font { attributes[.font] = font }
         if let color { attributes[.foregroundColor] = color }
         if tracking != 0 { attributes[.kern] = CGFloat(tracking) }
+        if isStrikethrough {
+            attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
+            if let strikethroughColor {
+                #if os(macOS)
+                attributes[.strikethroughColor] = strikethroughColor.nsColor
+                #else
+                attributes[.strikethroughColor] = strikethroughColor.uiColor
+                #endif
+            }
+        }
         return NSAttributedString(string: text, attributes: attributes)
     }
 }

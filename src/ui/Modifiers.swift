@@ -177,6 +177,9 @@ public struct ModifierView: NativeComponent {
     /// nil means fill, which is what every modifier but .frame wants: a
     /// .padding() or .background() must not reposition what it wraps.
     public var alignment: Alignment?
+    /// SwiftUI's .tint: the accent of the controls inside (a Toggle's on
+    /// colour, a Slider's track, a symbol's tint). Apple; nil leaves it.
+    public var tint: Color?
 
     public var children: [any View] { [content] }
 
@@ -200,7 +203,8 @@ public struct ModifierView: NativeComponent {
         padding: EdgeInsets? = nil,
         alignment: Alignment? = nil,
         disabled: Bool? = nil,
-        allowsHitTesting: Bool? = nil
+        allowsHitTesting: Bool? = nil,
+        tint: Color? = nil
     ) {
         self.content = content
         self.opacity = opacity
@@ -222,6 +226,7 @@ public struct ModifierView: NativeComponent {
         self.alignment = alignment
         self.disabled = disabled
         self.allowsHitTesting = allowsHitTesting
+        self.tint = tint
     }
 
     #if os(Linux)
@@ -256,6 +261,8 @@ public struct ModifierView: NativeComponent {
             return v
         #elseif os(Android)
             return OmniAndroid.makeContainer()
+        #elseif os(Windows)
+            return WinView.make("Modifier", layout: .bin)
         #else
         #error("no implementation for this platform")
         #endif
@@ -287,6 +294,7 @@ public struct ModifierView: NativeComponent {
             if let opacity = opacity { view.alpha = opacity }
             if let bg = backgroundColor { view.backgroundColor = bg.uiColor }
             if let fg = foregroundColor { applyForegroundColor(fg, to: view) }
+            if let tint { Self.applyTint(tint, to: view) }
             if let disabled { Self.applyEnabled(!disabled, to: view) }
             // The wrapper alone: UIKit skips it and its subtree, and hit-tests what's behind.
             // Under .disabled, applyEnabled has already turned it off.
@@ -374,11 +382,22 @@ public struct ModifierView: NativeComponent {
             let claim = NativeLayoutPriority(rawValue: 1)
             let hug = NativeLayoutPriority(rawValue: 250)
             let claimed = view.contentHuggingPriority(for: .horizontal).rawValue <= 1
-            view.setContentHuggingPriority(fillsWidth ? claim : hug, for: .horizontal)
-            view.setContentHuggingPriority(fillsHeight ? claim : hug, for: .vertical)
+            // A wrapper that does not size an axis itself (a .padding, a
+            // .background) is as flexible there as what it wraps, as in SwiftUI:
+            // the claim insertChild carried up from a filling child holds on
+            // every later render, or a heading padded once its subtitle
+            // changed went back to its narrowest width.
+            let wrapped = view.subviews.first
+            let inheritsWidth = width == nil && maxWidth == nil
+                && (wrapped?.contentHuggingPriority(for: .horizontal).rawValue ?? 250) <= 1
+            let inheritsHeight = height == nil && maxHeight == nil
+                && (wrapped?.contentHuggingPriority(for: .vertical).rawValue ?? 250) <= 1
+            let fillsAcross = fillsWidth || inheritsWidth
+            view.setContentHuggingPriority(fillsAcross ? claim : hug, for: .horizontal)
+            view.setContentHuggingPriority(fillsHeight || inheritsHeight ? claim : hug, for: .vertical)
             // A row ties its fills' widths when it updates, before this did: tie again, or
             // a frame that stopped filling stayed the same width as one that still fills.
-            if claimed != fillsWidth, let row = view.superview as? NativeStack, row.isHorizontalRow {
+            if claimed != fillsAcross, let row = view.superview as? NativeStack, row.isHorizontalRow {
                 HStack.tieSpacerWidths(in: row)
             }
 
@@ -462,6 +481,8 @@ public struct ModifierView: NativeComponent {
                     horizontal: fillsWidth || AndroidExpansion.wants(view, horizontal: true),
                     vertical: fillsHeight || AndroidExpansion.wants(view, horizontal: false))
             }
+        #elseif os(Windows)
+            applyWindows(WinView.from(view))
         #else
         #error("no implementation for this platform")
         #endif
@@ -497,13 +518,24 @@ public struct ModifierView: NativeComponent {
     #endif
 
     #if os(iOS)
+        /// UIKit's tintColor is inherited by the subtree; a switch's on colour
+        /// and a slider's track are not, so they are set where they are.
+        @MainActor static func applyTint(_ color: Color, to view: UIView) {
+            let c = color.uiColor
+            view.tintColor = c
+            if let toggle = view as? UISwitch { toggle.onTintColor = c }
+            if let slider = view as? UISlider { slider.minimumTrackTintColor = c }
+            for subview in view.subviews { applyTint(color, to: subview) }
+        }
+
         private func applyForegroundColor(_ color: Color, to view: UIView) {
             if let label = view as? UILabel { label.textColor = color.uiColor }
             if let imageView = view as? UIImageView { imageView.tintColor = color.uiColor }
             // A ProgressView's spinner, as SwiftUI tints it.
             if let spinner = view as? UIActivityIndicatorView { spinner.color = color.uiColor }
-            // A TextEditor's text.
+            // A TextEditor's text, and a TextField's, as SwiftUI colours both.
             if let textView = view as? UITextView { textView.textColor = color.uiColor }
+            if let field = view as? UITextField { field.textColor = color.uiColor }
             if let button = view as? UIButton {
                 button.tintColor = color.uiColor
                 button.setTitleColor(color.uiColor, for: .normal)
@@ -526,6 +558,7 @@ public struct ModifierView: NativeComponent {
             // updateNative ran before this child existed, so a first render
             // left it untinted. macOS re-applies in layout instead.
             if let foregroundColor { applyForegroundColor(foregroundColor, to: child) }
+            if let tint { Self.applyTint(tint, to: child) }
             #endif
             // Likewise .disabled: the child's subtree is whole by now, and a
             // first render left every control in it enabled.
@@ -567,7 +600,7 @@ public struct ModifierView: NativeComponent {
                     constraints.append(child.topAnchor.constraint(equalTo: parent.topAnchor, constant: CGFloat(pt)))
                 case .center:
                     constraints.append(child.centerYAnchor.constraint(equalTo: parent.centerYAnchor))
-                case .bottom:
+                case .bottom, .lastTextBaseline:
                     constraints.append(child.bottomAnchor.constraint(equalTo: parent.bottomAnchor, constant: CGFloat(-pb)))
                 }
 
@@ -651,6 +684,8 @@ public struct ModifierView: NativeComponent {
                 omni_jni_set_child_gravity(OmniAndroid.getEnv(), child, resolved.androidGravity)
             }
             if let foregroundColor { tintSymbols(foregroundColor, in: child) }
+        #elseif os(Windows)
+            insertWindows(WinView.from(child), into: WinView.from(parent))
         #else
         #error("no implementation for this platform")
         #endif
@@ -803,6 +838,11 @@ public struct ZIndexModifier: ViewModifier {
     public func body(content: Content) -> some View { ModifierView(content: content, zIndex: zIndex) }
 }
 
+public struct TintModifier: ViewModifier {
+    public var color: Color?
+    public func body(content: Content) -> some View { ModifierView(content: content, tint: color) }
+}
+
 public struct ForegroundColorModifier: ViewModifier {
     public var color: Color
     public func body(content: Content) -> some View { ModifierView(content: content, foregroundColor: color) }
@@ -860,6 +900,12 @@ public extension View {
 
     func foregroundColor(_ color: Color) -> ModifiedContent<Self, ForegroundColorModifier> {
         self.modifier(ForegroundColorModifier(color: color))
+    }
+
+    /// SwiftUI's .tint: the accent colour of the controls inside. nil leaves
+    /// theirs. Apple only for now (UIKit's tintColor; AppKit takes no tint).
+    func tint(_ color: Color?) -> ModifiedContent<Self, TintModifier> {
+        self.modifier(TintModifier(color: color))
     }
 }
 
@@ -948,6 +994,10 @@ public struct AppearanceModifierView: NativeComponent {
             let v = OmniAndroid.makeContainer()
             AndroidModifierState.set(AppearanceState(), for: v)
             return v
+        #elseif os(Windows)
+            let v = WinView.make("OnAppear", layout: .bin)
+            WinView.from(v).state = AppearanceState()
+            return v
         #else
         #error("no implementation for this platform")
         #endif
@@ -961,6 +1011,8 @@ public struct AppearanceModifierView: NativeComponent {
             guard let state = objc_getAssociatedObject(view, &appearanceKey) as? AppearanceState else { return }
         #elseif os(Android)
             let state = AndroidModifierState.ensure(for: view) { AppearanceState() }
+        #elseif os(Windows)
+            let state = WinView.from(view).state(AppearanceState.init)
         #else
         #error("no implementation for this platform")
         #endif
@@ -989,6 +1041,8 @@ public struct AppearanceModifierView: NativeComponent {
             ])
         #elseif os(Android)
             OmniAndroid.addChild(child, to: parent)
+        #elseif os(Windows)
+            winPackFill(child, into: parent)
         #else
         #error("no implementation for this platform")
         #endif
@@ -1037,6 +1091,10 @@ public struct ChangeModifierView<V: Equatable>: NativeComponent {
             let v = OmniAndroid.makeContainer()
             AndroidModifierState.set(ChangeState<V>(), for: v)
             return v
+        #elseif os(Windows)
+            let v = WinView.make("OnChange", layout: .bin)
+            WinView.from(v).state = ChangeState<V>()
+            return v
         #else
         #error("no implementation for this platform")
         #endif
@@ -1050,6 +1108,8 @@ public struct ChangeModifierView<V: Equatable>: NativeComponent {
             guard let state = objc_getAssociatedObject(view, &changeKey) as? ChangeState<V> else { return }
         #elseif os(Android)
             let state = AndroidModifierState.ensure(for: view) { ChangeState<V>() }
+        #elseif os(Windows)
+            let state = WinView.from(view).state(ChangeState<V>.init)
         #else
         #error("no implementation for this platform")
         #endif
@@ -1080,6 +1140,8 @@ public struct ChangeModifierView<V: Equatable>: NativeComponent {
             ])
         #elseif os(Android)
             OmniAndroid.addChild(child, to: parent)
+        #elseif os(Windows)
+            winPackFill(child, into: parent)
         #else
         #error("no implementation for this platform")
         #endif
@@ -1218,6 +1280,10 @@ public struct TaskModifierView: NativeComponent {
             let v = OmniAndroid.makeContainer()
             AndroidModifierState.set(TaskState(), for: v)
             return v
+        #elseif os(Windows)
+            let v = WinView.make("Task", layout: .bin)
+            WinView.from(v).state = TaskState()
+            return v
         #else
         #error("no implementation for this platform")
         #endif
@@ -1231,6 +1297,8 @@ public struct TaskModifierView: NativeComponent {
             guard let state = objc_getAssociatedObject(view, &taskKey) as? TaskState else { return }
         #elseif os(Android)
             let state = AndroidModifierState.ensure(for: view) { TaskState() }
+        #elseif os(Windows)
+            let state = WinView.from(view).state(TaskState.init)
         #else
         #error("no implementation for this platform")
         #endif
@@ -1260,6 +1328,8 @@ public struct TaskModifierView: NativeComponent {
             ])
         #elseif os(Android)
             OmniAndroid.addChild(child, to: parent)
+        #elseif os(Windows)
+            winPackFill(child, into: parent)
         #else
         #error("no implementation for this platform")
         #endif
@@ -1378,6 +1448,8 @@ public struct ShadowModifierView: NativeComponent {
             // Android has no blur-radius shadow on a plain view; elevation is the
             // platform's equivalent and drives a material drop shadow.
             return OmniAndroid.makeContainer()
+        #elseif os(Windows)
+            return WinView.make("Shadow", layout: .bin)
         #else
         #error("no implementation for this platform")
         #endif
@@ -1400,6 +1472,8 @@ public struct ShadowModifierView: NativeComponent {
             view.layer.shadowOffset = CGSize(width: x, height: y)
         #elseif os(Android)
             omni_jni_set_shadow(OmniAndroid.getEnv(), view, Float(radius), EffectBackgroundView.argb(color))
+        #elseif os(Windows)
+            WinView.from(view).shadow = (color, radius, x, y)
         #endif
     }
 
@@ -1417,6 +1491,8 @@ public struct ShadowModifierView: NativeComponent {
             ])
         #elseif os(Android)
             OmniAndroid.addChild(child, to: parent)
+        #elseif os(Windows)
+            winPackFill(child, into: parent)
         #else
         #error("no implementation for this platform")
         #endif
@@ -1451,7 +1527,7 @@ public extension View {
     /// Same caveat as .background: this is a ZStack, so the result sizes to the
     /// larger of the two rather than to the content. `alignment` is honoured.
     func overlay<V: View>(_ overlayView: V, alignment: Alignment = .center) -> some View {
-        #if os(macOS) || os(iOS)
+        #if os(macOS) || os(iOS) || os(Windows)
         AnyView(OverlayView(base: self, overlay: overlayView, alignment: alignment))
         #else
         AnyView(ZStack(alignment: alignment) {

@@ -479,6 +479,29 @@ public struct AppleBuilder {
         return lines.joined(separator: "\n")
     }
 
+    /// The permission texts: omni's own for the camera, the photo library and
+    /// Face ID (always declared, see generateInfoPlist), each replaced by
+    /// omni.json's usageDescriptions where it has one, and its others added.
+    private func usageFragment(for target: String) -> String {
+        var texts: [String: String] = [
+            "NSCameraUsageDescription": "\(target) uses the camera to take a photo you choose to capture.",
+            "NSPhotoLibraryUsageDescription": "\(target) uses your photo library to choose a photo you select.",
+            // Approval keys. Without it, Face ID crashes.
+            "NSFaceIDUsageDescription": "\(target) uses Face ID to unlock and approve payments.",
+        ]
+        for (key, text) in OmniManifest.load(from: path).usageDescriptions ?? [:]
+            where key.hasPrefix("NS") && key.hasSuffix("UsageDescription") && !text.isEmpty {
+            texts[key] = text
+        }
+        func escaped(_ s: String) -> String {
+            s.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;")
+                .replacingOccurrences(of: ">", with: "&gt;")
+        }
+        return texts.keys.sorted().map {
+            "    <key>\($0)</key>\n    <string>\(escaped(texts[$0]!))</string>"
+        }.joined(separator: "\n")
+    }
+
     private func generateInfoPlist(target: String, platform: BundlePlatform,
                                    iconFragment: String = "") -> String {
         let platformKeys: String
@@ -561,13 +584,7 @@ public struct AppleBuilder {
                  API is actually called, and calling one WITHOUT this key
                  present is an instant, unrecoverable crash (SIGABRT), not a
                  denied-permission error a caller can react to. -->
-            <key>NSCameraUsageDescription</key>
-            <string>\(target) uses the camera to take a photo you choose to capture.</string>
-            <key>NSPhotoLibraryUsageDescription</key>
-            <string>\(target) uses your photo library to choose a photo you select.</string>
-            <!-- Approval keys. Without it, Face ID crashes. -->
-            <key>NSFaceIDUsageDescription</key>
-            <string>\(target) uses Face ID to unlock and approve payments.</string>
+        \(usageFragment(for: target))
         \(iconFragment)
         </dict>
         </plist>

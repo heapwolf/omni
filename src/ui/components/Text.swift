@@ -31,6 +31,9 @@ public struct Text: NativeComponent {
     public var lineSpacing: Double = 0
     /// Letter spacing in points.
     public var tracking: Double = 0
+    /// SwiftUI's .strikethrough: a line through the text, in its colour or `strikethroughColor`.
+    public var isStrikethrough = false
+    public var strikethroughColor: Color? = nil
 
     public var body: any View { self }
 
@@ -95,6 +98,14 @@ public struct Text: NativeComponent {
     public func tracking(_ points: Double) -> Text {
         var copy = self
         copy.tracking = points
+        return copy
+    }
+
+    /// SwiftUI's: a line through the text when `isActive`, in `color` or the text's own.
+    public func strikethrough(_ isActive: Bool = true, color: Color? = nil) -> Text {
+        var copy = self
+        copy.isStrikethrough = isActive
+        copy.strikethroughColor = color
         return copy
     }
 

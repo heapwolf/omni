@@ -77,6 +77,8 @@ public enum Appearance {
         return match == .darkAqua ? .dark : .light
         #elseif os(Android)
         return omni_jni_is_night_mode(OmniAndroid.env) != 0 ? .dark : .light
+        #elseif os(Windows)
+        return Win32.systemIsDark ? .dark : .light
         #else
         return .light
         #endif
@@ -93,6 +95,21 @@ public enum Appearance {
         NSApplication.shared.appearance = preferred.map { NSAppearance(named: $0 == .dark ? .darkAqua : .aqua) } ?? nil
         #endif
     }
+
+    #if os(Windows)
+    /// WM_SETTINGCHANGE: the light/dark choice may have changed. The title
+    /// bars, the controls' themes and every colour follow.
+    @MainActor static func windowsSettingChanged() {
+        let before = current
+        refresh()
+        guard current != before || WinSurface.all.isEmpty == false else { return }
+        for surface in WinSurface.all.values {
+            Win32.applyTitleBarAppearance(surface.hwnd, dark: current == .dark)
+            surface.root?.forEachInSubtree { $0.control?.applyTheme(dark: current == .dark) }
+            surface.setNeedsLayout()
+        }
+    }
+    #endif
 }
 
 public extension Color {

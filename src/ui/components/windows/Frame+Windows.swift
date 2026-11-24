@@ -1,50 +1,71 @@
+// src/ui/components/windows/Frame+Windows.swift
 #if os(Windows)
-    import Foundation
-    import CWindows
+import Foundation
 
-    extension Frame {
-        @MainActor public func makeNative() -> NativeView {
-            // Treat nil width/height as 0 for initial Win32 creation;
-            // The Omni layout engine will calculate intrinsic sizes later.
-            let w = width ?? 0
-            let h = height ?? 0
-            let v = omni_win_create_frame(nil, w, h)
-            return v
-        }
-
-        @MainActor public func updateNative(_ view: NativeView) {
-            // 1. Update Layout
-            if let w = width, let h = height {
-                omni_win_set_frame(view, w, h)
-            }
-
-            // 2. Cursor Styling
-            if let cursor = self.cursor {
-                cursor.withCString { ptr in
-                    omni_win_set_cursor(view, ptr)
-                }
-            }
-
-            // 3. Event Binding
-            // (Assumes you've added "tap", "drag", "scroll" handlers to WindowsEventRegistry)
-            if let tap = self.onTap {
-                bindWindowsEvent(view, "tap") { tap() }
-            }
-
-            if let tapLoc = self.onTapLocation {
-                // WindowsEventRegistry would need to unpack lParam for X/Y coordinates
-                bindWindowsEvent(view, "tapLocation") { /* decode coords */ tapLoc(0, 0) }
-            }
-
-            if let drag = self.onDrag {
-                bindWindowsEvent(view, "drag") { /* decode delta */ drag(0, 0) }
-            }
-        }
-
-        @MainActor public func insertChild(_ child: NativeView, into parent: NativeView) {
-            // Equivalent to adding the View, then applying leading/trailing/top/bottom constraints
-            omni_win_add_child(parent, child)
-            omni_win_fill_parent(child, parent)
-        }
+extension Frame {
+    @MainActor public func makeNative() -> NativeView {
+        WinView.make("Frame", layout: .bin)
     }
+
+    @MainActor public func updateNative(_ view: NativeView) {
+        let v = winView(view)
+        v.fixedWidth = width
+        v.fixedHeight = height
+        // A pinned axis is the frame's to size; an unpinned one is as flexible as the content.
+        v.hexpand = false
+        v.vexpand = false
+        v.hexpandSet = width != nil
+        v.vexpandSet = height != nil
+        v.contentAlignment = alignment
+        v.cursor = cursor
+        v.onTap = onTap
+        v.onTapLocation = onTapLocation
+        v.onScrollWheel = onScroll
+        v.onDrag = onDrag
+        v.onDragEnded = onDragEnded
+        for child in v.children { place(child) }
+    }
+
+    @MainActor public func insertChild(_ child: NativeView, into parent: NativeView) {
+        let c = winView(child)
+        winView(parent).add(c)
+        place(c)
+    }
+
+    /// A pinned axis places the child by alignment; an unpinned one is the child's to fill.
+    @MainActor private func place(_ child: WinView) {
+        child.halign = width == nil ? .fill : alignment.horizontal.winAlign
+        child.valign = height == nil ? .fill : alignment.vertical.winAlign
+    }
+}
+
+public extension TapGestureView {
+    @MainActor func makeNative() -> NativeView {
+        WinView.make("TapGesture", layout: .bin)
+    }
+
+    @MainActor func updateNative(_ view: NativeView) {
+        winView(view).onTap = action
+    }
+
+    @MainActor func insertChild(_ child: NativeView, into parent: NativeView) {
+        winPackFill(child, into: parent)
+    }
+}
+
+public extension PressGestureView {
+    @MainActor func makeNative() -> NativeView {
+        WinView.make("PressGesture", layout: .bin)
+    }
+
+    @MainActor func updateNative(_ view: NativeView) {
+        let v = winView(view)
+        v.onPress = onPressChange
+        v.onTap = action
+    }
+
+    @MainActor func insertChild(_ child: NativeView, into parent: NativeView) {
+        winPackFill(child, into: parent)
+    }
+}
 #endif

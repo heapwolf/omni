@@ -16,7 +16,7 @@ extension TextField {
         #elseif os(iOS)
         let tf = UITextField()
         tf.placeholder = placeholder
-        tf.borderStyle = .roundedRect
+        tf.borderStyle = .none
         tf.translatesAutoresizingMaskIntoConstraints = false
         #endif
 
@@ -68,7 +68,8 @@ extension TextField {
             if tf.returnKeyType != returnKey { tf.returnKeyType = returnKey }
             let contentType = configuration.contentType.map(Self.uiContentType)
             if tf.textContentType != contentType { tf.textContentType = contentType }
-            let border: UITextField.BorderStyle = configuration.style.isPlain ? .none : .roundedRect
+            // SwiftUI's automatic style on iOS draws no border: only .roundedBorder does.
+            let border: UITextField.BorderStyle = configuration.style.kind == .roundedBorder ? .roundedRect : .none
             if tf.borderStyle != border { tf.borderStyle = border }
             if let font = Tracker.current?.environment.font?.uiFont, tf.font != font { tf.font = font }
 

@@ -78,7 +78,7 @@ extension VerticalAlignment {
         switch self {
         case .top: return GtkAlign.start
         case .center: return GtkAlign.center
-        case .bottom: return GtkAlign.end
+        case .bottom, .lastTextBaseline: return GtkAlign.end
         }
     }
 }

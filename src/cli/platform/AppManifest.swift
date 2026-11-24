@@ -20,6 +20,12 @@ struct OmniManifest: Decodable {
     /// the capability; this gives the Simulator build the same entitlement,
     /// and has a device build say when its profile lacks it.
     var signInWithApple: Bool?
+    /// What iOS shows when the app asks for a permission, by Info.plist key:
+    /// `{"NSCameraUsageDescription": "Focal reads link codes with the camera."}`.
+    /// Replaces omni's own wording for a key it always writes (camera, photo
+    /// library, Face ID) and adds any other (NSLocalNetworkUsageDescription, ...).
+    /// Only `NS...UsageDescription` keys; others are ignored.
+    var usageDescriptions: [String: String]?
 
     struct PlayIntegrity: Decodable {
         var cloudProjectNumber: String

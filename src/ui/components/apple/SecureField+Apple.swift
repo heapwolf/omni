@@ -27,7 +27,7 @@ extension SecureField {
             let tf = UITextField()
             tf.placeholder = title
             tf.isSecureTextEntry = true
-            tf.borderStyle = .roundedRect
+            tf.borderStyle = .none
             tf.translatesAutoresizingMaskIntoConstraints = false
             // See TextField+Apple.swift's makeNative for why this is needed.
             tf.setContentHuggingPriority(.init(rawValue: 1), for: .horizontal)
@@ -53,7 +53,9 @@ extension SecureField {
         #elseif os(iOS)
             if let tf = view as? UITextField {
                 if tf.text != currentText { tf.text = currentText }
-                tf.borderStyle = configuration.style.isPlain ? .none : .roundedRect
+                // As TextField's: SwiftUI's automatic style on iOS draws no border.
+                let border: UITextField.BorderStyle = configuration.style.kind == .roundedBorder ? .roundedRect : .none
+                if tf.borderStyle != border { tf.borderStyle = border }
                 if let font = Tracker.current?.environment.font { tf.font = font.uiFont }
                 // A PIN wants the number pad as much as an OTP field does.
                 tf.keyboardType = TextField.uiKeyboardType(configuration.keyboardType)

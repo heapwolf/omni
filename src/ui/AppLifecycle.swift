@@ -91,6 +91,9 @@ import CAndroid
         for window in app.windows { window.makeFirstResponder(nil) }
         #elseif os(Android)
         omni_jni_dismiss_keyboard(OmniAndroid.getEnv())
+        #elseif os(Windows)
+        // The focus back to the window: no text field has it.
+        WinApp.dismissKeyboard()
         #endif
     }
 

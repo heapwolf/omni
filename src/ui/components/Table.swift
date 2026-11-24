@@ -226,7 +226,7 @@ struct TableWide: View {
     let model: TableModel
 
     var body: some View {
-        VStack(spacing: 0) {
+        let table = VStack(spacing: 0) {
             HStack(spacing: 12) {
                 ForEach(Array(model.columns.enumerated()), id: \.offset) { index, column in
                     AnyView(sized(header(index, column), column))
@@ -243,6 +243,13 @@ struct TableWide: View {
                 }
             }
         }
+        #if os(Windows)
+        // Columns wider than the table: the header and the rows scroll across
+        // together, as macOS's table does, rather than widening everything around it.
+        return ScrollView(axis: .horizontal) { table }
+        #else
+        return table
+        #endif
     }
 
     private func header(_ index: Int, _ column: TableColumnSpec) -> some View {

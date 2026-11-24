@@ -91,6 +91,8 @@ public class SheetState {
         public var sheetWindow: NativeView?
     #elseif os(Android)
         public var sheetDialog: NativeView?
+    #elseif os(Windows)
+        var sheet: WinSheet?
     #endif
     /// A re-apply of the sheet's options is queued (onPresentationRender).
     var isApplyPending = false
@@ -117,7 +119,10 @@ public class SheetState {
         if onlyIfChanged, key == appliedDetents { return }
         appliedDetents = key
         #if os(iOS)
-        if let controller = sheetController { options.apply(to: controller, animated: true) }
+        // Not to a sheet on its way up or down: UIKit won't change it then.
+        if let controller = sheetController, !controller.isBeingPresented, !controller.isBeingDismissed {
+            options.apply(to: controller, animated: true)
+        }
         #elseif os(Android)
         if let dialog = sheetDialog {
             omni_jni_update_sheet(OmniAndroid.getEnv(), dialog, options.androidDetents, Int32(options.androidSelected),
@@ -239,6 +244,10 @@ public struct SheetModifierView<SheetContent: View>: NativeComponent {
             let v = OmniAndroid.makeContainer()
             AndroidModifierState.set(SheetState(), for: v)
             return v
+        #elseif os(Windows)
+            let v = WinView.make("Sheet", layout: .bin)
+            WinView.from(v).state = SheetState()
+            return v
         #else
         #error("no implementation for this platform")
         #endif
@@ -252,6 +261,8 @@ public struct SheetModifierView<SheetContent: View>: NativeComponent {
             guard let state = objc_getAssociatedObject(view, &sheetKey) as? SheetState else { return }
         #elseif os(Android)
             let state = AndroidModifierState.ensure(for: view) { SheetState() }
+        #elseif os(Windows)
+            let state = WinView.from(view).state(SheetState.init)
         #else
         #error("no implementation for this platform")
         #endif
@@ -304,6 +315,8 @@ public struct SheetModifierView<SheetContent: View>: NativeComponent {
                 state.sheetOverlay?.setContent(native)
                 #elseif os(Android)
                 if let dialog = state.sheetDialog { omni_jni_set_sheet_content(OmniAndroid.getEnv(), dialog, native) }
+                #elseif os(Windows)
+                state.sheet?.setContent(native)
                 #endif
             }
             state.sheetNode = node
@@ -369,6 +382,13 @@ public struct SheetModifierView<SheetContent: View>: NativeComponent {
                     Presenting.present(vc, from: view, presenter, isWanted: { state.sheetController === vc })
                 }
 
+            #elseif os(Windows)
+                let sheet = WinSheet(content: sheetNative, options: { [weak node] in
+                    node.map { PresentationOptions.collect(from: $0) } ?? PresentationOptions()
+                }, over: WinView.from(view).surface ?? WinSurface.main)
+                sheet.onDismiss = { self.isPresented.wrappedValue = false }
+                state.sheet = sheet
+                sheet.present()
             #elseif os(Linux)
                 let dialog = gtk_window_new(0) // GTK_WINDOW_TOPLEVEL
                 gtk_window_set_default_size(dialog, 400, 400)
@@ -428,12 +448,21 @@ public struct SheetModifierView<SheetContent: View>: NativeComponent {
                 // A render that replaced the content's view: the sheet shows the new one.
                 if let native = node.native { state.sheetOverlay?.setContent(native) }
                 #endif
+                #if os(Windows)
+                if let native = node.native { state.sheet?.setContent(native) }
+                state.sheet?.resize()
+                #endif
                 #if os(Android)
                 if let native = node.native, let dialog = state.sheetDialog {
                     omni_jni_set_sheet_content(OmniAndroid.getEnv(), dialog, native)
                 }
-                // Detents may have changed, or the selection been set from code.
-                state.applyOptions()
+                // Detents may have changed, or the selection been set from code:
+                // applied only when they did. Applied on every render of the
+                // content, each was an animated change on the sheet; one still
+                // running as the sheet was closed (its content re-rendered on
+                // the way: an edited item saved) left the dismissal stuck, the
+                // sheet on screen and taking every touch.
+                state.applyOptions(onlyIfChanged: true)
                 #endif
                 #if os(iOS)
                 if let native = node.native, let host = state.sheetController?.view {
@@ -444,8 +473,9 @@ public struct SheetModifierView<SheetContent: View>: NativeComponent {
                         state.host(native, in: host)
                     }
                 }
-                // Detents may have changed, or the selection been set from code.
-                state.applyOptions()
+                // Detents may have changed, or the selection been set from code:
+                // applied only when they did (see Android's, above).
+                state.applyOptions(onlyIfChanged: true)
                 #endif
             }
 
@@ -460,6 +490,9 @@ public struct SheetModifierView<SheetContent: View>: NativeComponent {
                 state.sheetController?.dismiss(animated: true)
                 state.sheetController = nil
                 state.delegateProxy = nil
+            #elseif os(Windows)
+                state.sheet?.dismiss()
+                state.sheet = nil
             #elseif os(Linux)
                 if let win = state.sheetWindow {
                     gtk_widget_destroy(win)
@@ -497,6 +530,13 @@ public struct SheetModifierView<SheetContent: View>: NativeComponent {
         state.sheetOverlay = nil
         state.sheetNode?.unmount()
         state.sheetNode = nil
+        #elseif os(Windows)
+        guard let state = WinView.existing(view)?.state as? SheetState, state.isPresented else { return }
+        state.isPresented = false
+        state.sheet?.dismiss()
+        state.sheet = nil
+        state.sheetNode?.unmount()
+        state.sheetNode = nil
         #elseif os(Android)
         guard let state = AndroidModifierState.get(SheetState.self, for: view),
               state.isPresented else { return }
@@ -523,6 +563,8 @@ public struct SheetModifierView<SheetContent: View>: NativeComponent {
             ])
         #elseif os(Android)
             OmniAndroid.addChild(child, to: parent)
+        #elseif os(Windows)
+            winPackFill(child, into: parent)
         #else
         #error("no implementation for this platform")
         #endif
@@ -654,6 +696,10 @@ public struct AlertModifierView: NativeComponent {
             let v = OmniAndroid.makeContainer()
             AndroidModifierState.set(AlertState(), for: v)
             return v
+        #elseif os(Windows)
+            let v = WinView.make("Alert", layout: .bin)
+            WinView.from(v).state = AlertState()
+            return v
         #else
         #error("no implementation for this platform")
         #endif
@@ -673,6 +719,8 @@ public struct AlertModifierView: NativeComponent {
             guard let state = objc_getAssociatedObject(view, &sheetKey) as? AlertState else { return }
         #elseif os(Android)
             let state = AndroidModifierState.ensure(for: view) { AlertState() }
+        #elseif os(Windows)
+            let state = WinView.from(view).state(AlertState.init)
         #else
         #error("no implementation for this platform")
         #endif
@@ -728,6 +776,20 @@ public struct AlertModifierView: NativeComponent {
                     Presenting.present(ac, from: view, presenter, isWanted: { [weak state] in state?.alertController === ac })
                 }
 
+            #elseif os(Windows)
+                let shown = AlertAction.shown(actions)
+                let title = self.title, message = self.message
+                let owner = WinView.from(view).surface ?? WinSurface.main
+                // After this render: the dialog runs a loop of its own until it's answered.
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        guard state.isPresented else { return }
+                        let chosen = WinAlert.run(title: title, message: message, actions: shown, owner: owner)
+                        guard state.isPresented else { return }
+                        state.isPresented = false
+                        if let chosen { self.respond(chosen) } else { self.isPresented.wrappedValue = false }
+                    }
+                }
             #elseif os(Linux)
                 let dialog = gtk_dialog_new()
                 let contentArea = gtk_dialog_get_content_area(dialog)
@@ -803,6 +865,8 @@ public struct AlertModifierView: NativeComponent {
             ])
         #elseif os(Android)
             OmniAndroid.addChild(child, to: parent)
+        #elseif os(Windows)
+            winPackFill(child, into: parent)
         #else
         #error("no implementation for this platform")
         #endif

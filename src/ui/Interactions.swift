@@ -316,6 +316,7 @@ extension ScrollView: SwipeTarget { static var interactionName: String { "Scroll
 /// gesture recognizers around it.
 final class OmniTouchWindow: UIWindow {
     override func sendEvent(_ event: UIEvent) {
+        if event.type == .touches { TouchCrashLog.record(event, in: self) }
         // Before super: a tap's action can change the screen, and the path
         // is of the view that was tapped.
         if event.type == .touches, let touches = event.allTouches {
@@ -334,6 +335,71 @@ final class OmniTouchWindow: UIWindow {
             }
         }
         super.sendEvent(event)
+    }
+}
+
+/// TEMPORARY, to find the double-swipe crash on a device no debugger reaches: the last few
+/// touch events as the window got them (each touch's view, whether it is still in the
+/// window, the recognizers on it and their delays), written to Documents/omni-crash.txt
+/// by an uncaught-exception handler as the app dies. `TouchCrashLog.takeReport()` hands it
+/// over on the next launch. Remove once the crash is understood.
+public enum TouchCrashLog {
+    nonisolated(unsafe) private static var events: [String] = []
+    nonisolated(unsafe) private static var count = 0
+    private static let installed: Bool = {
+        NSSetUncaughtExceptionHandler { exception in TouchCrashLog.write(exception) }
+        return true
+    }()
+
+    private static var file: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("omni-crash.txt")
+    }
+
+    /// Every recognizer seen on a touch, weakly: rechecked as each new touch begins.
+    nonisolated(unsafe) private static let seen = NSHashTable<UIGestureRecognizer>.weakObjects()
+
+    @MainActor static func record(_ event: UIEvent, in window: UIWindow) {
+        _ = installed
+        count += 1
+        let touches = event.allTouches ?? []
+        for touch in touches { for g in touch.gestureRecognizers ?? [] { seen.add(g) } }
+        // A swipe's moves, dozens of them: counted, not kept.
+        if touches.allSatisfy({ $0.phase == .moved || $0.phase == .stationary }) { return }
+        var lines = ["event #\(count) t=\(String(format: "%.3f", event.timestamp))"]
+        if touches.contains(where: { $0.phase == .began }) {
+            // Left over from earlier touches: not at rest, or on a view no longer shown.
+            for g in seen.allObjects {
+                let gone = g.view == nil || g.view!.window == nil
+                guard gone || (g.state != .possible && g.state != .failed) else { continue }
+                lines.append("  LEFTOVER \(type(of: g)) state=\(g.state.rawValue) enabled=\(g.isEnabled) delays=\(g.delaysTouchesBegan ? "B" : "-")\(g.delaysTouchesEnded ? "E" : "-") view=\(g.view.map { "\(type(of: $0))" } ?? "nil")\(gone ? " OUT OF WINDOW" : "")")
+            }
+        }
+        for touch in touches {
+            let v = touch.view
+            let place = v == nil ? "no view" : (v!.window === window ? "in window" : "OUT OF WINDOW")
+            lines.append("  touch \(ObjectIdentifier(touch).hashValue) phase=\(touch.phase.rawValue) view=\(v.map { "\(type(of: $0))" } ?? "nil") \(place) next=\(v?.next.map { "\(type(of: $0))" } ?? "nil")")
+            for g in touch.gestureRecognizers ?? [] {
+                let gv = g.view
+                lines.append("    \(type(of: g)) state=\(g.state.rawValue) enabled=\(g.isEnabled) delays=\(g.delaysTouchesBegan ? "B" : "-")\(g.delaysTouchesEnded ? "E" : "-") view=\(gv.map { "\(type(of: $0))" } ?? "nil")\(gv != nil && gv!.window == nil ? " OUT OF WINDOW" : "")")
+            }
+        }
+        events.append(lines.joined(separator: "\n"))
+        if events.count > 12 { events.removeFirst(events.count - 12) }
+    }
+
+    private static func write(_ exception: NSException) {
+        let text = ["omni crash: \(exception.name.rawValue): \(exception.reason ?? "")",
+                    "last touch events, oldest first:"] + events +
+                   ["stack:"] + exception.callStackSymbols
+        try? text.joined(separator: "\n").write(to: file, atomically: true, encoding: .utf8)
+    }
+
+    /// The last crash's report, once: read and deleted.
+    public static func takeReport() -> String? {
+        guard let text = try? String(contentsOf: file, encoding: .utf8) else { return nil }
+        try? FileManager.default.removeItem(at: file)
+        return text
     }
 }
 #endif

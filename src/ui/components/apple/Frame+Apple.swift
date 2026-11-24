@@ -214,12 +214,16 @@ extension Frame {
         #elseif os(iOS)
         if self.onDrag != nil || self.onDragEnded != nil, !((v.gestureRecognizers ?? []).contains { $0 is UIPanGestureRecognizer }) {
             let pan = UIPanGestureRecognizer(target: v, action: #selector(OmniFrameView.handlePan(_:)))
+            // Touches not held back: see TapGesture+Apple.swift.
+            pan.delaysTouchesEnded = false
             pan.delegate = v
             v.addGestureRecognizer(pan)
         }
         if self.onTap != nil || self.onTapLocation != nil,
            !((v.gestureRecognizers ?? []).contains { $0 is UITapGestureRecognizer }) {
             let tap = UITapGestureRecognizer(target: v, action: #selector(OmniFrameView.handleTap(_:)))
+            // Touches not held back: see TapGesture+Apple.swift.
+            tap.delaysTouchesEnded = false
             tap.delegate = v
             v.addGestureRecognizer(tap)
         }
@@ -247,7 +251,7 @@ extension Frame {
         switch alignment.vertical {
         case .top: constraints.append(child.topAnchor.constraint(equalTo: parent.topAnchor))
         case .center: constraints.append(child.centerYAnchor.constraint(equalTo: parent.centerYAnchor))
-        case .bottom: constraints.append(child.bottomAnchor.constraint(equalTo: parent.bottomAnchor))
+        case .bottom, .lastTextBaseline: constraints.append(child.bottomAnchor.constraint(equalTo: parent.bottomAnchor))
         }
 
         // An axis the frame does not pin is still the child's to fill, or a
@@ -269,6 +273,24 @@ extension Frame {
         }
 
         NSLayoutConstraint.activate(constraints)
+
+        // On an axis it does not size, a frame is as flexible as its child,
+        // as a SwiftUI view with a gesture on it is: a child that fills (a
+        // ScrollView, a .frame(maxWidth: .infinity)) carries that claim up,
+        // as the modifier wrapper's insertChild does. Without it, a screen
+        // under a drag-tracking Frame centered at its narrowest width.
+        if width == nil {
+            let childH = child.contentHuggingPriority(for: .horizontal)
+            if childH.rawValue < parent.contentHuggingPriority(for: .horizontal).rawValue {
+                parent.setContentHuggingPriority(childH, for: .horizontal)
+            }
+        }
+        if height == nil {
+            let childV = child.contentHuggingPriority(for: .vertical)
+            if childV.rawValue < parent.contentHuggingPriority(for: .vertical).rawValue {
+                parent.setContentHuggingPriority(childV, for: .vertical)
+            }
+        }
     }
 }
 #endif

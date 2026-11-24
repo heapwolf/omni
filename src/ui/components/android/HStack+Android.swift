@@ -17,7 +17,7 @@ extension HStack {
         switch alignment {
         case .top: gravity = 48    // GRAVITY_TOP
         case .center: gravity = 16 // GRAVITY_CENTER_VERTICAL
-        case .bottom: gravity = 80 // GRAVITY_BOTTOM
+        case .bottom, .lastTextBaseline: gravity = 80 // GRAVITY_BOTTOM
         }
         omni_jni_set_gravity(env, view, gravity)
 

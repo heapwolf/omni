@@ -13,6 +13,13 @@ import Foundation
     typealias NativeLayoutPriority = UILayoutPriority
     public class OmniSpacerView: UIView {
         public override var intrinsicContentSize: CGSize { CGSize(width: 0, height: 0) }
+
+        // Never a touch's view, as SwiftUI's Spacer takes no touches: one lands on what holds
+        // it, and the recognizers around it still see it. A Spacer is made and dropped freely
+        // as a stack re-renders; a touch begun on one a render then freed (its view nil by the
+        // time it ended) left UIKit holding it, and the next touch crashed UIKit
+        // (-[UIGestureRecognizer _delayTouchesForEvent:inPhase:], insertObject: nil).
+        public override func point(inside point: CGPoint, with event: UIEvent?) -> Bool { false }
     }
 #endif
 

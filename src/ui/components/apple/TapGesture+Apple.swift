@@ -40,6 +40,11 @@ public extension TapGestureView {
             let recognizer = NSClickGestureRecognizer(target: view, action: #selector(OmniTapView.handleClick(_:)))
         #elseif os(iOS)
             let recognizer = UITapGestureRecognizer(target: view, action: #selector(OmniTapView.handleClick(_:)))
+            // Touches are not held back for this recognizer, as SwiftUI's gestures never
+            // hold them: UIKit's delaysTouchesEnded (on by default) queued a touch whose
+            // view a re-render had replaced, and crashed delivering it (-[UIGestureRecognizer
+            // _delayTouchesForEvent:inPhase:], insertObject: nil). Same at every recognizer omni makes.
+            recognizer.delaysTouchesEnded = false
             recognizer.delegate = view
         #endif
         view.addGestureRecognizer(recognizer)

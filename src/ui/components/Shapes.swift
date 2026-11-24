@@ -55,10 +55,14 @@ public struct Capsule: Shape {
     public func fill<V: View>(_ content: V) -> AnyView { AnyView(content.clipShape(self)) }
 }
 
-/// A simple primitive that acts as the default fill for shapes if not explicitly colored
+/// A simple primitive that acts as the default fill for shapes if not explicitly colored.
+/// A SwiftUI shape takes all the room it is offered, on both axes; a bare Spacer
+/// grows only along its stack (tall in a VStack, never wide), so a
+/// `Rectangle().frame(height: 1)` rule in a column drew as wide as its
+/// siblings happened to be. The frame claims both.
 public struct ShapeDefaultFill: View {
     public init() {}
-    public var body: some View { Spacer() } // Spacer expands to fill bounds natively
+    public var body: some View { Spacer().frame(maxWidth: .infinity, maxHeight: .infinity) }
 }
 
 // MARK: - 3. View Modifiers
@@ -71,10 +75,15 @@ public extension View {
     /// clips the background to it. An intrinsically-large background grows the
     /// layout here where SwiftUI would mask it. `alignment` is honoured.
     func background<V: View>(_ backgroundView: V, alignment: Alignment = .center) -> some View {
+        #if os(Windows)
+        // Sized by the view, as SwiftUI's: the background is fitted to it.
+        OverlayView(base: self, overlay: backgroundView, alignment: alignment, isBehind: true)
+        #else
         ZStack(alignment: alignment) {
             backgroundView
             self
         }
+        #endif
     }
 
     /// SwiftUI's current spelling, with the background in a trailing closure.
@@ -83,10 +92,14 @@ public extension View {
         @ViewBuilder content: () -> V
     ) -> some View {
         let backgroundView = content()
+        #if os(Windows)
+        return OverlayView(base: self, overlay: backgroundView, alignment: alignment, isBehind: true)
+        #else
         return ZStack(alignment: alignment) {
             backgroundView
             self
         }
+        #endif
     }
 
     func cornerRadius(_ radius: Double) -> some View {

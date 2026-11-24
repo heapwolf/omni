@@ -25,6 +25,28 @@ public enum Clipboard {
         #endif
     }
 
+    /// A number that changes each time anything is copied, here or in another app, read
+    /// without the paste prompt: to read the clipboard only once it has changed. iOS and
+    /// macOS; nil elsewhere.
+    @MainActor public static var changeCount: Int? {
+        #if os(iOS)
+        return UIPasteboard.general.changeCount
+        #elseif os(macOS)
+        return NSPasteboard.general.changeCount
+        #else
+        return nil
+        #endif
+    }
+
+    /// Whether the clipboard holds text, asked without the paste prompt on iOS.
+    @MainActor public static var hasText: Bool {
+        #if os(iOS)
+        return UIPasteboard.general.hasStrings
+        #else
+        return string != nil
+        #endif
+    }
+
     /// The clipboard's text, if it holds any. Reading it may show the system's
     /// paste prompt on iOS.
     @MainActor public static var string: String? {

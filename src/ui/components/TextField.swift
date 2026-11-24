@@ -29,7 +29,8 @@ public struct TextFieldStyle: Sendable, Equatable {
     public static let plain = TextFieldStyle(kind: .plain)
     public static let roundedBorder = TextFieldStyle(kind: .roundedBorder)
 
-    /// automatic is the rounded border every backend has always drawn.
+    /// automatic is the platform's own: borderless on iOS, as SwiftUI's;
+    /// the rounded border on the other backends.
     public var isPlain: Bool { kind == .plain }
 }
 

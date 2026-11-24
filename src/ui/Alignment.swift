@@ -6,6 +6,9 @@ public enum HorizontalAlignment: Hashable, Sendable {
 
 public enum VerticalAlignment: Hashable, Sendable {
     case top, center, bottom
+    /// SwiftUI's: in an HStack, texts share their last baseline (iOS and macOS, the stack
+    /// view's own); elsewhere, as .bottom.
+    case lastTextBaseline
 }
 
 public struct Alignment: Hashable, Sendable {
@@ -45,7 +48,7 @@ extension VerticalAlignment {
         switch self {
         case .top: return 48    // TOP
         case .center: return 16 // CENTER_VERTICAL
-        case .bottom: return 80 // BOTTOM
+        case .bottom, .lastTextBaseline: return 80 // BOTTOM
         }
     }
 }

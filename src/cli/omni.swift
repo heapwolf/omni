@@ -69,6 +69,9 @@ struct Build: ParsableCommand {
 
     @OptionGroup var flagOptions: FlagOptions
 
+    @Option(name: .long, help: "android: the ABIs in the .apk, comma-separated, or all (default arm64-v8a, or OMNI_ABI).")
+    var abi: String?
+
     func run() throws {
         guard let targetPlatform = Platform(rawValue: platform.lowercased()) else {
             Console.failure("Invalid platform '\(platform)'. Options: macos, ios, ios-simulator, linux, android.")
@@ -80,7 +83,11 @@ struct Build: ParsableCommand {
         switch targetPlatform {
             case .android:
                 let builder = AndroidBuilder(target: output, path: appPath, flags: flags)
-                try builder.build()
+                if let abi {
+                    try builder.buildAPK(abis: AndroidBuilder.abis(abi))
+                } else {
+                    try builder.build()
+                }
 
             case .macos, .ios, .iosSimulator:
                 let builder = AppleBuilder(target: output, path: appPath, platform: targetPlatform, flags: flags)
@@ -99,8 +106,9 @@ struct Build: ParsableCommand {
 
 struct Package: ParsableCommand {
     static let configuration = CommandConfiguration(
-        abstract: "Builds a distributable installer (.pkg/.deb/.rpm/.msi) for the app. "
-            + "iOS/Android aren't covered — a device install and a .apk are already the installer."
+        abstract: "Builds a distributable installer (.pkg/.deb/.rpm/.msi) for the app, "
+            + "or Android's store build (.aab for Play, or a release .apk). "
+            + "iOS isn't covered — it installs via devicectl/the App Store."
     )
 
     @Option(name: .shortAndLong, help: "The output executable name.")
@@ -112,7 +120,7 @@ struct Package: ParsableCommand {
     @Option(name: [.customShort("l"), .customLong("lib-path")], help: "The path containing framework lib files.")
     var libPath: String = "src/lib"
 
-    @Option(name: [.customShort("p"), .customLong("platform")], help: "Target platform (macos, linux, windows).")
+    @Option(name: [.customShort("p"), .customLong("platform")], help: "Target platform (macos, linux, windows, android).")
     var platform: String = "macos"
 
     @OptionGroup var flagOptions: FlagOptions
@@ -123,12 +131,18 @@ struct Package: ParsableCommand {
     @Option(name: .long, help: "Installer version string.")
     var version: String = "1.0"
 
-    @Option(name: .long, help: "Linux package format: deb, rpm, or both.")
-    var format: String = "deb"
+    @Option(name: .long, help: "android: the build number (versionCode). Each Play upload must be higher than the last.")
+    var buildNumber: Int = 1
+
+    @Option(name: .long, help: "android: the ABIs, comma-separated, or all (the default).")
+    var abi: String = "all"
+
+    @Option(name: .long, help: "Linux package format: deb, rpm, or both (default deb). Android: aab (default) or apk.")
+    var format: String = ""
 
     func run() throws {
         guard let targetPlatform = Platform(rawValue: platform.lowercased()) else {
-            Console.failure("Invalid platform '\(platform)'. Options: macos, linux, windows.")
+            Console.failure("Invalid platform '\(platform)'. Options: macos, linux, windows, android.")
             throw ExitCode.failure
         }
         let flags = try flagOptions.resolve(appPath: appPath)
@@ -143,6 +157,7 @@ struct Package: ParsableCommand {
         case .linux:
             let builder = LinuxBuilder(target: output, path: appPath, libPath: libPath, flags: flags)
             try builder.build()
+            let format = format.isEmpty ? "deb" : format
             if format == "deb" || format == "both" {
                 _ = try builder.buildDeb(architecture: arch.isEmpty ? "amd64" : arch, version: version)
             }
@@ -155,9 +170,21 @@ struct Package: ParsableCommand {
             try builder.build()
             _ = try builder.buildMsi(architecture: arch.isEmpty ? "x64" : arch, version: version)
 
-        case .ios, .iosSimulator, .android:
-            Console.info("\(platform) doesn't need a separate installer — iOS installs via devicectl/the App Store, "
-                + "and Android's .apk from `omni build` is already the installer.")
+        case .android:
+            // Optimized, stripped, not debuggable, signed with the app's upload key.
+            let builder = AndroidBuilder(target: output, path: appPath, flags: flags,
+                                         release: AndroidRelease(version: version, buildNumber: buildNumber))
+            let abis = try AndroidBuilder.abis(abi)
+            switch format.isEmpty ? "aab" : format {
+            case "aab": try builder.buildBundle(abis: abis)
+            case "apk": try builder.buildAPK(abis: abis)
+            default:
+                Console.failure("Invalid Android format '\(format)'. Options: aab, apk.")
+                throw ExitCode.failure
+            }
+
+        case .ios, .iosSimulator:
+            Console.info("\(platform) doesn't need a separate installer — iOS installs via devicectl/the App Store.")
         }
     }
 }

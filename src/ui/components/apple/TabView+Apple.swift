@@ -53,9 +53,15 @@ extension NativeSwipeModifierView {
 
             let target = OmniSwipeTarget(onLeft: onSwipeLeft, onRight: onSwipeRight)
             let swipeLeft = UISwipeGestureRecognizer(target: target, action: #selector(OmniSwipeTarget.handleSwipe(_:)))
+            // Touches not held back: see TapGesture+Apple.swift.
+            swipeLeft.delaysTouchesEnded = false
             swipeLeft.direction = .left
 
             let swipeRight = UISwipeGestureRecognizer(target: target, action: #selector(OmniSwipeTarget.handleSwipe(_:)))
+
+            // Touches not held back: see TapGesture+Apple.swift.
+
+            swipeRight.delaysTouchesEnded = false
             swipeRight.direction = .right
 
             v.addGestureRecognizer(swipeLeft)

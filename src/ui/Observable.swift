@@ -87,6 +87,34 @@ public typealias OmniObservableObject = ObservableObject
     // wrappedValue on every render doesn't keep piling up subscriptions.
     private static var subscriptions: [ObjectIdentifier: [ObjectIdentifier: Subscription]] = [:]
 
+    /// The nodes changed this turn, in the order their changes came, and the
+    /// animation in force at the first that had one.
+    private struct Pending { weak var node: Node? }
+    private static var pending: [Pending] = []
+    private static var pendingIds: Set<ObjectIdentifier> = []
+    private static var pendingAnimation: Animation?
+    private static var flushScheduled = false
+
+    private static func schedule(_ node: Node, animation: Animation?) {
+        if pendingIds.insert(ObjectIdentifier(node)).inserted { pending.append(Pending(node: node)) }
+        if pendingAnimation == nil { pendingAnimation = animation }
+        guard !flushScheduled else { return }
+        flushScheduled = true
+        DispatchQueue.main.async { MainActor.assumeIsolated { flush() } }
+    }
+
+    private static func flush() {
+        // Held weakly: one gone since its change is not rendered.
+        let nodes = pending.compactMap(\.node)
+        let animation = pendingAnimation
+        pending = []
+        pendingIds = []
+        pendingAnimation = nil
+        flushScheduled = false
+        let renderAll = { Engine.renderOutermost { nodes.forEach { Engine.request($0) } } }
+        if let animation { withAnimation(animation) { renderAll() } } else { renderAll() }
+    }
+
     static func track<O: OmniObservableObject>(_ object: O) {
         guard let node = Tracker.current else { return }
         let objectId = ObjectIdentifier(object)
@@ -99,22 +127,24 @@ public typealias OmniObservableObject = ObservableObject
         subscriptions[objectId] = subscriptions[objectId]?.filter { $0.value.node != nil }
         // objectWillChange fires from @Published's willSet, before the new
         // value is stored. Rendering synchronously reads the old value and
-        // nothing renders again, so the change is lost. receive(on:) defers
-        // to the next main-queue turn, after the write, as SwiftUI does.
+        // nothing renders again, so the change is lost. The render waits for
+        // the next main-queue turn, after the write, as SwiftUI's does.
         //
-        // The render happens a turn later, after withAnimation has returned, so
-        // the animation in force at the change is carried across to it.
+        // And it is one render for the turn, as SwiftUI's is: every change in
+        // it (three @Published writes for one tap, say) and every node they
+        // reach, rendered once, outermost first, none inside another. Rendered
+        // per change and per node, as each arrived, a screen of rows that
+        // each observed the model was rendered once per row per write, on top
+        // of their parent rendering them: seconds of main thread for an edit.
+        //
+        // The animation in force at the change is carried across to it.
         let cancellable = object.objectWillChange
-            .map { _ in MainActor.assumeIsolated { Transaction.currentAnimation } }
-            .receive(on: DispatchQueue.main)
-            .sink(
-            receiveCompletion: { _ in },
-            receiveValue: { [weak node] animation in
-                guard let node else { return }
-                if let animation { withAnimation(animation) { Engine.render(node) } }
-                else { Engine.render(node) }
+            .sink { [weak node] _ in
+                MainActor.assumeIsolated {
+                    guard let node else { return }
+                    schedule(node, animation: Transaction.currentAnimation)
+                }
             }
-        )
         subscriptions[objectId, default: [:]][nodeId] = Subscription(node: node, cancellable: cancellable)
     }
 }

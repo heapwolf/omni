@@ -27,33 +27,6 @@ import Foundation
         g_signal_connect_data(v, event, unsafeBitCast(cb, to: UnsafeMutableRawPointer.self),
                               ptr, nil, G_CONNECT_SWAPPED)
     }
-#elseif os(Windows)
-    import CWindows
-
-    @MainActor
-    public class WindowsEventRegistry {
-        // Maps the memory address of the HWND (NativeView) to its action closure
-        public static var handlers: [Int: () -> Void] = [:]
-    }
-
-    @MainActor
-    public func bindWindowsEvent(_ v: NativeView, _ event: String, _ act: @escaping () -> Void) {
-        let handleKey = Int(bitPattern: v)
-        WindowsEventRegistry.handlers[handleKey] = act
-    }
-
-    @MainActor
-    public func handleWindowsCommand(lParam: Int64) {
-        // For Win32 WM_COMMAND, lParam holds the HWND of the control (e.g., the Button)
-        let handleKey = Int(lParam)
-        WindowsEventRegistry.handlers[handleKey]?()
-    }
-
-    @MainActor
-    public func unbindWindowsEvent(_ v: NativeView) {
-        let handleKey = Int(bitPattern: v)
-        WindowsEventRegistry.handlers.removeValue(forKey: handleKey)
-    }
 #elseif os(macOS) || os(iOS)
     import ObjectiveC
 

@@ -124,7 +124,11 @@ struct AndroidToolchain {
 
     let root: String
     let buildToolsVersion = "36.0.0"
-    let platformAPI = "34"
+    /// The API level compiled against and targeted. Play takes uploads only from apps
+    /// targeting a recent level: raise this (and the archive below) once a year.
+    let platformAPI = "36"
+    let platformArchive = "platform-36_r02.zip"
+    let bundletoolVersion = "1.18.3"
 
     private let fm = FileManager.default
     private let env = ProcessInfo.processInfo.environment
@@ -198,7 +202,7 @@ struct AndroidToolchain {
         // STDOUT_FILENO: Swift 6 will not read the mutable C `stdout` global.
         guard isatty(STDOUT_FILENO) == 1 else {
             Console.info("fetching \(label)")
-            while running() { usleep(200_000) }
+            while running() { Thread.sleep(forTimeInterval: 0.2) }
             return
         }
 
@@ -227,7 +231,7 @@ struct AndroidToolchain {
         Console.info("\(label)")
         while running() {
             draw(bytesSoFar())
-            usleep(200_000)
+            Thread.sleep(forTimeInterval: 0.2)
         }
         draw(bytesSoFar())
         FileHandle.standardOutput.write(Data("\n".utf8))
@@ -322,8 +326,9 @@ struct AndroidToolchain {
         let jar = "\(root)/platforms/android-\(platformAPI)/android.jar"
         if fm.fileExists(atPath: jar) { return jar }
 
-        let archive = "\(root)/platform.zip"
-        try download("https://dl.google.com/android/repository/platform-34-ext7_r03.zip",
+        // Named for the level: download() keeps whatever is already at `archive`.
+        let archive = "\(root)/platform-\(platformAPI).zip"
+        try download("https://dl.google.com/android/repository/\(platformArchive)",
                      to: archive, label: "android-\(platformAPI) platform")
         try unzip(archive, into: "\(root)/platform-staging")
 
@@ -836,6 +841,20 @@ struct AndroidToolchain {
         }
     }
 
+    /// bundletool, which turns a module into an .aab: what Play takes.
+    func bundletool() throws -> String {
+        let jar = "\(root)/bundletool-\(bundletoolVersion).jar"
+        try download("https://github.com/google/bundletool/releases/download/"
+                     + "\(bundletoolVersion)/bundletool-all-\(bundletoolVersion).jar",
+                     to: jar, label: "bundletool \(bundletoolVersion)")
+        return jar
+    }
+
+    /// An NDK LLVM tool (llvm-readelf, llvm-strip).
+    func llvmTool(_ name: String) throws -> String {
+        "\(try ndk())/toolchains/llvm/prebuilt/\(ndkHostTag)/bin/\(name)"
+    }
+
     /// A debug keystore, generated once. Unsigned APKs cannot be installed.
     func debugKeystore() throws -> String {
         let keystore = "\(root)/debug.keystore"
@@ -858,19 +877,36 @@ struct AndroidToolchain {
 
 // MARK: - Builder
 
+/// A store build's version: an optimized, stripped, non-debuggable build signed with
+/// the app's upload key.
+public struct AndroidRelease {
+    /// versionName: what the store and Settings show.
+    public let version: String
+    /// versionCode: Play takes an upload only if it is higher than every one before.
+    public let buildNumber: Int
+
+    public init(version: String, buildNumber: Int) {
+        self.version = version
+        self.buildNumber = buildNumber
+    }
+}
+
 public struct AndroidBuilder {
     public let target: String
     public let path: String
     /// omni.json's resolved `flags`, embedded in the generated entry.
     let flags: AppFlags
+    /// nil for a debug build, the kind a device runs while developing.
+    let release: AndroidRelease?
 
     private let tools = AndroidToolchain()
     private let fm = FileManager.default
 
-    init(target: String, path: String, flags: AppFlags = .none) {
+    init(target: String, path: String, flags: AppFlags = .none, release: AndroidRelease? = nil) {
         self.target = target
         self.path = path
         self.flags = flags
+        self.release = release
     }
 
     func packageName(for product: String) -> String {
@@ -886,8 +922,13 @@ public struct AndroidBuilder {
     }
 
     /// Named for the app (--output), not the library behind it.
-    func apkPath(product: String, abi: String) -> String {
-        "\(packageRoot())/.omni/android/\(appName(product: product))-\(abi).apk"
+    func apkPath(product: String, abis: [String]) -> String {
+        let abi = abis.count == 1 ? abis[0] : "universal"
+        return "\(packageRoot())/.omni/android/\(appName(product: product))-\(abi)\(release == nil ? "" : "-release").apk"
+    }
+
+    func bundlePath(product: String) -> String {
+        "\(packageRoot())/.omni/android/\(appName(product: product)).aab"
     }
 
     /// Nearest enclosing directory with a Package.swift. --app-path is often an
@@ -1112,21 +1153,154 @@ public struct AndroidBuilder {
         return path
     }
 
+    /// Every ABI Play serves. arm64-v8a is nearly every phone; armeabi-v7a the
+    /// 32-bit ones still sold cheap; x86_64 emulators and Chromebooks.
+    public static let allABIs = ["arm64-v8a", "armeabi-v7a", "x86_64"]
+
+    /// "all", or a comma-separated list: OMNI_ABI and --abi.
+    public static func abis(_ spec: String) throws -> [String] {
+        if spec == "all" { return allABIs }
+        let abis = spec.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+        guard !abis.isEmpty else { throw AndroidError.missing("no ABI given") }
+        for abi in abis where !allABIs.contains(abi) {
+            throw AndroidError.missing("unsupported ABI: \(abi) (one of \(allABIs.joined(separator: ", ")), or all)")
+        }
+        return abis
+    }
+
     public func build() throws {
-        try build(abi: ProcessInfo.processInfo.environment["OMNI_ABI"] ?? "arm64-v8a")
+        try buildAPK(abis: Self.abis(ProcessInfo.processInfo.environment["OMNI_ABI"] ?? "arm64-v8a"))
     }
 
     @discardableResult
     public func build(abi: String) throws -> String {
+        try buildAPK(abis: [abi])
+    }
+
+    /// An installable .apk carrying every ABI in `abis`: for a device, or a store
+    /// that takes APKs. Play wants buildBundle's .aab.
+    @discardableResult
+    public func buildAPK(abis: [String]) throws -> String {
+        let staged = try stage(abis: abis, protoResources: false)
+        let stage = staged.directory
+
+        // Add dex + native libs, align, sign.
+        try? fm.removeItem(atPath: "\(stage)/unsigned.apk")
+        try copyFile(staged.linked, to: "\(stage)/unsigned.apk")
+        try copyFile("\(stage)/dex/classes.dex", to: "\(stage)/classes.dex")
+
+        // Native libraries stored, not deflated (-0), and zipalign -P 16 puts each on
+        // a 16 KB boundary: with extractNativeLibs="false" Android maps them straight
+        // out of the APK, so a phone keeps one copy of them, not the APK's and an
+        // extracted one, and a 16 KB-page kernel can map them at all.
+        let zip = try Shell.exec("/bin/sh", ["-c",
+            "cd \(shellQuote(stage)) && zip -q unsigned.apk classes.dex && zip -q -0 -r unsigned.apk lib"])
+        guard zip.status == 0 else { throw AndroidError.failed("zip", zip.output) }
+
+        let buildTools = try tools.buildTools()
+        let aligned = "\(stage)/aligned.apk"
+        try? fm.removeItem(atPath: aligned)
+        let zipalign = try tools.runHostTool("\(buildTools)/zipalign",
+            ["-f", "-P", "16", "4", "\(stage)/unsigned.apk", aligned])
+        guard zipalign.status == 0 else { throw AndroidError.failed("zipalign", zipalign.output) }
+
+        let output = apkPath(product: staged.product, abis: abis)
+        // apksigner throws if the parent directory does not already exist.
+        try fm.createDirectory(atPath: (output as NSString).deletingLastPathComponent,
+                               withIntermediateDirectories: true)
+        try? fm.removeItem(atPath: output)
+        let signing = try self.signing()
+        let signer = try Shell.exec(try tools.java("java"), [
+            "-cp", "\(buildTools)/lib/apksigner.jar", "com.android.apksigner.ApkSignerTool",
+            "sign", "--ks", signing.keystore, "--ks-key-alias", signing.alias,
+            "--ks-pass", signing.storePassword.apksigner, "--key-pass", signing.keyPassword.apksigner,
+            "--min-sdk-version", "28", "--out", output, aligned
+        ])
+        guard signer.status == 0 else { throw AndroidError.failed("apksigner", signer.output) }
+
+        Console.success("\(output)")
+        return output
+    }
+
+    /// A signed .aab for Play, every ABI in it. Play cuts it into APKs per device,
+    /// each carrying only that device's ABI and density.
+    @discardableResult
+    public func buildBundle(abis: [String] = allABIs) throws -> String {
+        let staged = try stage(abis: abis, protoResources: true)
+        let stage = staged.directory
+
+        // A bundle module: the proto-format link's manifest under manifest/, its
+        // resources.pb, res/ and assets/ where they were, plus dex/ and lib/.
+        let module = "\(stage)/module"
+        try? fm.removeItem(atPath: module)
+        try fm.createDirectory(atPath: "\(module)/manifest", withIntermediateDirectories: true)
+        try fm.createDirectory(atPath: "\(module)/dex", withIntermediateDirectories: true)
+        let unpack = try Shell.exec("/usr/bin/unzip", ["-q", "-o", staged.linked, "-d", module])
+        guard unpack.status == 0 else { throw AndroidError.failed("unzip", unpack.output) }
+        try fm.moveItem(atPath: "\(module)/AndroidManifest.xml",
+                        toPath: "\(module)/manifest/AndroidManifest.xml")
+        try copyFile("\(stage)/dex/classes.dex", to: "\(module)/dex/classes.dex")
+        try fm.copyItem(atPath: "\(stage)/lib", toPath: "\(module)/lib")
+
+        try? fm.removeItem(atPath: "\(stage)/base.zip")
+        let zip = try Shell.exec("/bin/sh", ["-c", "cd \(shellQuote(module)) && zip -q -r ../base.zip ."])
+        guard zip.status == 0 else { throw AndroidError.failed("zip", zip.output) }
+
+        // Native libraries stored and 16 KB-aligned in every APK Play cuts from this,
+        // for the reason buildAPK gives.
+        let config = "\(stage)/BundleConfig.json"
+        try """
+        {"optimizations": {"uncompressNativeLibraries": {"enabled": true, "alignment": "PAGE_ALIGNMENT_16K"}}}
+        """.write(toFile: config, atomically: true, encoding: .utf8)
+
+        let output = bundlePath(product: staged.product)
+        try fm.createDirectory(atPath: (output as NSString).deletingLastPathComponent,
+                               withIntermediateDirectories: true)
+        let unsigned = "\(stage)/unsigned.aab"
+        try? fm.removeItem(atPath: unsigned)
+        Console.info("bundling")
+        let bundle = try Shell.exec(try tools.java("java"), [
+            "-jar", try tools.bundletool(), "build-bundle",
+            "--modules=\(stage)/base.zip", "--config=\(config)", "--output=\(unsigned)"
+        ])
+        guard bundle.status == 0 else { throw AndroidError.failed("bundletool build-bundle", bundle.output) }
+
+        // An .aab is signed as a jar; apksigner signs only APKs.
+        let signing = try self.signing()
+        let jarsigner = try Shell.exec(try tools.java("jarsigner"), [
+            "-keystore", signing.keystore,
+            signing.storePassword.jarsignerFlag("-storepass"), signing.storePassword.jarsignerValue,
+            signing.keyPassword.jarsignerFlag("-keypass"), signing.keyPassword.jarsignerValue,
+            unsigned, signing.alias
+        ])
+        guard jarsigner.status == 0 else { throw AndroidError.failed("jarsigner", jarsigner.output) }
+        try? fm.removeItem(atPath: output)
+        try fm.moveItem(atPath: unsigned, toPath: output)
+
+        Console.success("\(output)")
+        return output
+    }
+
+    /// What buildAPK and buildBundle both start from: the app's classes dexed, its
+    /// native libraries under lib/<abi>/, and the manifest, resources and assets linked.
+    private struct Staged {
+        let directory: String
+        let product: String
+        /// aapt2 link's output: a binary-format APK, or proto-format for a bundle.
+        let linked: String
+    }
+
+    private func stage(abis: [String], protoResources: Bool) throws -> Staged {
         flags.announce()
         let product = try resolveProduct()
         let root = packageRoot()
+        let isRelease = release != nil
         // Staged off the project: zip and zipalign rewrite in place, which some
         // shares reject.
         let stage = ProcessInfo.processInfo.environment["OMNI_STAGE"]
-            ?? "\(NSHomeDirectory())/.omni/build/stage-\(product)-\(abi)"
+            ?? "\(NSHomeDirectory())/.omni/build/stage-\(product)-\(protoResources ? "bundle" : abis.joined(separator: "+"))"
         try? fm.removeItem(atPath: stage)
-        for sub in ["java", "classes", "dex", "lib/\(abi)"] {
+        for sub in ["java", "classes", "dex"] + abis.map({ "lib/\($0)" }) {
             try fm.createDirectory(atPath: "\(stage)/\(sub)", withIntermediateDirectories: true)
         }
 
@@ -1134,7 +1308,6 @@ public struct AndroidBuilder {
         let ndk = try tools.ndk()
         let buildTools = try tools.buildTools()
         let androidJar = try tools.platformJar()
-        let triple = try triple(for: abi)
 
         let app: (type: String, directory: String)
         if let inAppPath = try? findAppType(in: path) {
@@ -1156,7 +1329,7 @@ public struct AndroidBuilder {
         // Java -> classes, before the Swift build: it needs nothing from it and
         // takes seconds, so a Java error in the bridge fails the build now, not
         // after minutes of Swift. The framework's own bridge classes come from
-        // the library sources so the APK carries them too. Dexed in step 4.
+        // the library sources so the APK carries them too. Dexed below.
         Console.info("compiling java")
         // MainActivity calls into com.omni, so a missing bridge is an error here,
         // not four confusing ones from javac.
@@ -1182,20 +1355,6 @@ public struct AndroidBuilder {
             ["-nowarn", "-classpath", classpath, "-d", "\(stage)/classes"] + javaSources)
         guard javac.status == 0 else { throw AndroidError.failed("javac", javac.output) }
 
-        Console.info("building \(product) for \(abi) · app \(app.type)")
-        // SwiftPM's clone needs chmod, which 9p and SMB refuse.
-        let scratch = ProcessInfo.processInfo.environment["OMNI_SCRATCH"]
-            ?? "\(NSHomeDirectory())/.omni/build/\(product)-\(abi)"
-        var buildArguments = [
-            "build",
-            "--product", product,
-            "--package-path", root,
-            "--swift-sdk", triple,
-            "--scratch-path", scratch,
-            // liblog for __android_log_print, libandroid for the platform APIs.
-            "-Xlinker", "-llog",
-            "-Xlinker", "-landroid"
-        ]
         // Never build unscoped: SwiftPM may resolve the triple to another compiler's bundle.
         guard let scope = try tools.scopedSDKDirectory(version: swiftVersion) else {
             throw AndroidError.missing("""
@@ -1211,13 +1370,99 @@ public struct AndroidBuilder {
                     --checksum <sha256 from https://www.swift.org/install/>
                 """)
         }
-        buildArguments += ["--swift-sdks-path", scope]
+        for abi in abis {
+            Console.info("building \(product) for \(abi) · app \(app.type)\(isRelease ? " · release" : "")")
+            try buildNative(abi: abi, product: product, root: root, swiftVersion: swiftVersion,
+                            ndk: ndk, scope: scope, into: "\(stage)/lib/\(abi)")
+        }
+
+        let icon = AppIcon.resolve(in: path, name: product)
+        try manifest(product: product, hasIcon: true, play: play)
+            .write(toFile: "\(stage)/AndroidManifest.xml", atomically: true, encoding: .utf8)
+
+        // aapt2 needs res/ compiled before link can reference it.
+        let resDir = "\(stage)/res"
+        Console.info(icon.isPlaceholder
+              ? "No icon.png — using the placeholder"
+              : "Generating app icon...")
+        try AppIcon.writeAndroidMipmaps(source: icon, into: resDir)
+
+        // classes -> dex.
+        let classFiles = (fm.enumerator(atPath: "\(stage)/classes")?
+            .compactMap { $0 as? String }
+            .filter { $0.hasSuffix(".class") }
+            .map { "\(stage)/classes/\($0)" }) ?? []
+
+        let d8 = try Shell.exec(try tools.java("java"),
+            ["-cp", "\(buildTools)/lib/d8.jar", "com.android.tools.r8.D8",
+             isRelease ? "--release" : "--debug",
+             "--min-api", "28", "--lib", androidJar, "--output", "\(stage)/dex"] + classFiles + (play.map { [$0.jar] } ?? []))
+        guard d8.status == 0 else { throw AndroidError.failed("d8", d8.output) }
+
+        // aapt2 links the manifest and resources.
+        Console.info("packaging")
+        let linked = "\(stage)/base.apk"
+        var linkArgs = [
+            "link", "-I", androidJar,
+            "--manifest", "\(stage)/AndroidManifest.xml",
+            "--min-sdk-version", "28", "--target-sdk-version", tools.platformAPI,
+            "--version-code", String(release?.buildNumber ?? 1),
+            "--version-name", release?.version ?? "1.0",
+            "-o", linked
+        ]
+        // bundletool reads resources as protocol buffers, not the binary an APK holds.
+        if protoResources { linkArgs.append("--proto-format") }
+        // The app's Fonts/<Family>/, as assets/Fonts/; see AppFonts.swift.
+        let fonts = AppFonts.find(in: path)
+        fonts.announce()
+        let assetsDir = "\(stage)/assets"
+        try? fm.removeItem(atPath: assetsDir)
+        if !fonts.isEmpty {
+            try fonts.copy(into: assetsDir)
+            // Stored, not deflated: a font is read in place, by offset.
+            linkArgs += ["-A", assetsDir, "-0", "ttf", "-0", "otf"]
+        }
+        // Every build has an icon, so every build has a res/.
+        do {
+            let compiled = "\(stage)/compiled.zip"
+            let compile = try tools.runHostTool("\(buildTools)/aapt2", [
+                "compile", "--dir", resDir, "-o", compiled
+            ])
+            guard compile.status == 0 else { throw AndroidError.failed("aapt2 compile", compile.output) }
+            linkArgs.append(compiled)
+        }
+        let aapt2 = try tools.runHostTool("\(buildTools)/aapt2", linkArgs)
+        guard aapt2.status == 0 else { throw AndroidError.failed("aapt2 link", aapt2.output) }
+
+        return Staged(directory: stage, product: product, linked: linked)
+    }
+
+    /// The app's library for `abi`, with the Swift runtime and libc++ it loads, into `lib`.
+    private func buildNative(abi: String, product: String, root: String, swiftVersion: String,
+                             ndk: String, scope: String, into lib: String) throws {
+        let triple = try triple(for: abi)
+        let configuration = release == nil ? "debug" : "release"
+        // SwiftPM's clone needs chmod, which 9p and SMB refuse.
+        let scratch = ProcessInfo.processInfo.environment["OMNI_SCRATCH"]
+            ?? "\(NSHomeDirectory())/.omni/build/\(product)-\(abi)"
+        let buildArguments = [
+            "build",
+            "--product", product,
+            "--package-path", root,
+            "--swift-sdk", triple,
+            "--scratch-path", scratch,
+            "-c", configuration,
+            // liblog for __android_log_print, libandroid for the platform APIs.
+            "-Xlinker", "-llog",
+            "-Xlinker", "-landroid",
+            "--swift-sdks-path", scope
+        ]
         print("   swift \(swiftVersion) · SDK scoped to \(scope)")
 
         // SwiftPM reuses its build plan unless it sees a directory change, and on
         // shared folders (9p, SMB, VirtioFS) a new file may not change one: the file
         // was left out of the build. Planning again costs seconds.
-        try? fm.removeItem(atPath: "\(scratch)/\(triple)/debug/description.json")
+        try? fm.removeItem(atPath: "\(scratch)/\(triple)/\(configuration)/description.json")
         let swiftBuild = try Shell.exec(try tools.swiftExecutable(), buildArguments,
             environment: ["ANDROID_NDK_HOME": ndk], quiet: true)
 
@@ -1226,7 +1471,8 @@ public struct AndroidBuilder {
         }
 
         let soName = "lib\(product).so"
-        guard let builtSO = Self.builtLibrary(soName, in: scratch, triple: triple, fm: fm) else {
+        guard let builtSO = Self.builtLibrary(soName, in: scratch, triple: triple,
+                                              configuration: configuration, fm: fm) else {
             throw AndroidError.missing("""
                 \(soName) was not produced.
                 Package.swift must declare the app as a dynamic library, e.g.
@@ -1252,9 +1498,9 @@ public struct AndroidBuilder {
                 """)
         }
 
-        try copyFile(builtSO, to: "\(stage)/lib/\(abi)/\(soName)")
+        try copyFile(builtSO, to: "\(lib)/\(soName)")
 
-        // 2. Swift runtime + libc++, which the APK must carry itself.
+        // The Swift runtime + libc++, which the APK must carry itself.
         guard let swiftRuntime = tools.swiftRuntimeDirectory(
                 version: swiftVersion, arch: try swiftArch(for: abi)) else {
             throw AndroidError.missing("""
@@ -1263,98 +1509,112 @@ public struct AndroidBuilder {
                 runtime and dies at startup.
                 """)
         }
-        if let runtimeLibs = try? fm.contentsOfDirectory(atPath: swiftRuntime) {
-            for lib in runtimeLibs where lib.hasSuffix(".so") {
-                try? copyFile("\(swiftRuntime)/\(lib)",
-                              to: "\(stage)/lib/\(abi)/\(lib)")
-            }
+        let readelf = try tools.llvmTool("llvm-readelf")
+        for runtimeLib in try runtimeLibraries(needed: builtSO, runtime: swiftRuntime, readelf: readelf) {
+            try copyFile("\(swiftRuntime)/\(runtimeLib)", to: "\(lib)/\(runtimeLib)")
         }
         let libcpp = "\(ndk)/toolchains/llvm/prebuilt/\(tools.ndkHostTag)/sysroot/usr/lib/"
             + "\(try ndkLibDir(for: abi))/libc++_shared.so"
-        try? copyFile(libcpp, to: "\(stage)/lib/\(abi)/libc++_shared.so")
+        try copyFile(libcpp, to: "\(lib)/libc++_shared.so")
 
-        let icon = AppIcon.resolve(in: path, name: product)
-        try manifest(product: product, hasIcon: true, play: play)
-            .write(toFile: "\(stage)/AndroidManifest.xml", atomically: true, encoding: .utf8)
-
-        // aapt2 needs res/ compiled before link can reference it; see step 5.
-        let resDir = "\(stage)/res"
-        Console.info(icon.isPlaceholder
-              ? "No icon.png — using the placeholder"
-              : "Generating app icon...")
-        try AppIcon.writeAndroidMipmaps(source: icon, into: resDir)
-
-
-        // 4. classes -> dex.
-        let classFiles = (fm.enumerator(atPath: "\(stage)/classes")?
-            .compactMap { $0 as? String }
-            .filter { $0.hasSuffix(".class") }
-            .map { "\(stage)/classes/\($0)" }) ?? []
-
-        let d8 = try Shell.exec(try tools.java("java"),
-            ["-cp", "\(buildTools)/lib/d8.jar", "com.android.tools.r8.D8",
-             "--min-api", "28", "--lib", androidJar, "--output", "\(stage)/dex"] + classFiles + (play.map { [$0.jar] } ?? []))
-        guard d8.status == 0 else { throw AndroidError.failed("d8", d8.output) }
-
-        // aapt2 links the manifest and resources into base.apk.
-        Console.info("packaging")
-        var linkArgs = [
-            "link", "-I", androidJar,
-            "--manifest", "\(stage)/AndroidManifest.xml",
-            "--min-sdk-version", "28", "--target-sdk-version", "34",
-            "-o", "\(stage)/base.apk"
-        ]
-        // The app's Fonts/<Family>/, as assets/Fonts/; see AppFonts.swift.
-        let fonts = AppFonts.find(in: path)
-        fonts.announce()
-        let assetsDir = "\(stage)/assets"
-        try? fm.removeItem(atPath: assetsDir)
-        if !fonts.isEmpty {
-            try fonts.copy(into: assetsDir)
-            // Stored, not deflated: a font is read in place, by offset.
-            linkArgs += ["-A", assetsDir, "-0", "ttf", "-0", "otf"]
+        // A store build keeps no symbols but the dynamic ones, which JNI and the
+        // loader need: tens of MB a library, on phones with little room.
+        if release != nil {
+            let strip = try tools.llvmTool("llvm-strip")
+            let libraries = try fm.contentsOfDirectory(atPath: lib).filter { $0.hasSuffix(".so") }
+            let stripped = try Shell.exec(strip, ["--strip-unneeded"] + libraries.map { "\(lib)/\($0)" })
+            guard stripped.status == 0 else { throw AndroidError.failed("llvm-strip", stripped.output) }
         }
-        // Every build has an icon, so every build has a res/.
-        do {
-            let compiled = "\(stage)/compiled.zip"
-            let compile = try tools.runHostTool("\(buildTools)/aapt2", [
-                "compile", "--dir", resDir, "-o", compiled
-            ])
-            guard compile.status == 0 else { throw AndroidError.failed("aapt2 compile", compile.output) }
-            linkArgs.append(compiled)
+    }
+
+    /// The Swift runtime's libraries `library` loads, directly or through another:
+    /// its DT_NEEDED entries, followed. The runtime directory also holds XCTest,
+    /// Testing, FoundationXML and others an app rarely links, megabytes each.
+    /// Every library in the directory when readelf can't say.
+    private func runtimeLibraries(needed library: String, runtime: String, readelf: String) throws -> [String] {
+        let available = Set(try fm.contentsOfDirectory(atPath: runtime).filter { $0.hasSuffix(".so") })
+        func needs(_ path: String) -> [String]? {
+            guard let result = try? Shell.exec(readelf, ["--dynamic", "--wide", path]),
+                  result.status == 0 else { return nil }
+            // "0x0000000000000001 (NEEDED) Shared library: [libswiftCore.so]"
+            return result.output.split(whereSeparator: \.isNewline)
+                .filter { $0.contains("(NEEDED)") }
+                .compactMap { line in
+                    guard let open = line.lastIndex(of: "["), let close = line.lastIndex(of: "]"),
+                          open < close else { return nil }
+                    return String(line[line.index(after: open)..<close])
+                }
         }
-        let aapt2 = try tools.runHostTool("\(buildTools)/aapt2", linkArgs)
-        guard aapt2.status == 0 else { throw AndroidError.failed("aapt2 link", aapt2.output) }
+        var found: [String] = []
+        var queue = [library]
+        while let next = queue.popLast() {
+            guard let names = needs(next) else { return available.sorted() }
+            for name in names where available.contains(name) && !found.contains(name) {
+                found.append(name)
+                queue.append("\(runtime)/\(name)")
+            }
+        }
+        return found.sorted()
+    }
 
-        // 6. Add dex + native libs, align, sign.
-        try? fm.removeItem(atPath: "\(stage)/unsigned.apk")
-        try copyFile("\(stage)/base.apk", to: "\(stage)/unsigned.apk")
-        try copyFile("\(stage)/dex/classes.dex", to: "\(stage)/classes.dex")
+    /// How the build is signed: the debug keystore while developing, the app's own
+    /// upload key for a store. Passwords stay in the environment, out of `ps`.
+    private struct Signing {
+        enum Password {
+            case literal(String)
+            case environment(String)
+            var apksigner: String {
+                switch self {
+                case .literal(let value): return "pass:\(value)"
+                case .environment(let name): return "env:\(name)"
+                }
+            }
+            func jarsignerFlag(_ flag: String) -> String {
+                switch self {
+                case .literal: return flag
+                case .environment: return "\(flag):env"
+                }
+            }
+            var jarsignerValue: String {
+                switch self {
+                case .literal(let value): return value
+                case .environment(let name): return name
+                }
+            }
+        }
+        let keystore: String
+        let alias: String
+        let storePassword: Password
+        let keyPassword: Password
+    }
 
-        _ = try Shell.exec("/bin/sh", ["-c",
-            "cd \(shellQuote(stage)) && zip -q unsigned.apk classes.dex && zip -q -r unsigned.apk lib"])
+    private func signing() throws -> Signing {
+        guard release != nil else {
+            return Signing(keystore: try tools.debugKeystore(), alias: "omnidebug",
+                           storePassword: .literal("android"), keyPassword: .literal("android"))
+        }
+        let env = ProcessInfo.processInfo.environment
+        guard let keystore = env["OMNI_ANDROID_KEYSTORE"], fm.fileExists(atPath: keystore),
+              let alias = env["OMNI_ANDROID_KEY_ALIAS"],
+              env["OMNI_ANDROID_KEYSTORE_PASSWORD"] != nil else {
+            throw AndroidError.missing("""
+                A store build is signed with the app's upload key, not omni's debug one.
+                Set:
+                  OMNI_ANDROID_KEYSTORE           path to the keystore
+                  OMNI_ANDROID_KEY_ALIAS          the key's alias in it
+                  OMNI_ANDROID_KEYSTORE_PASSWORD  the keystore's password
+                  OMNI_ANDROID_KEY_PASSWORD       the key's, if it differs
 
-        let aligned = "\(stage)/aligned.apk"
-        try? fm.removeItem(atPath: aligned)
-        let zipalign = try tools.runHostTool("\(buildTools)/zipalign",
-            ["-f", "4", "\(stage)/unsigned.apk", aligned])
-        guard zipalign.status == 0 else { throw AndroidError.failed("zipalign", zipalign.output) }
-
-        let output = apkPath(product: product, abi: abi)
-        // apksigner throws if the parent directory does not already exist.
-        try fm.createDirectory(atPath: (output as NSString).deletingLastPathComponent,
-                               withIntermediateDirectories: true)
-        try? fm.removeItem(atPath: output)
-        let signer = try Shell.exec(try tools.java("java"), [
-            "-cp", "\(buildTools)/lib/apksigner.jar", "com.android.apksigner.ApkSignerTool",
-            "sign", "--ks", try tools.debugKeystore(),
-            "--ks-pass", "pass:android", "--key-pass", "pass:android",
-            "--min-sdk-version", "28", "--out", output, aligned
-        ])
-        guard signer.status == 0 else { throw AndroidError.failed("apksigner", signer.output) }
-
-        Console.success("\(output)")
-        return output
+                No upload key yet? Make one, and keep it (and its passwords) safe:
+                  keytool -genkeypair -keystore upload.jks -alias upload \\
+                    -keyalg RSA -keysize 4096 -validity 10000
+                """)
+        }
+        let keyPassword = env["OMNI_ANDROID_KEY_PASSWORD"] != nil
+            ? "OMNI_ANDROID_KEY_PASSWORD" : "OMNI_ANDROID_KEYSTORE_PASSWORD"
+        return Signing(keystore: keystore, alias: alias,
+                       storePassword: .environment("OMNI_ANDROID_KEYSTORE_PASSWORD"),
+                       keyPassword: .environment(keyPassword))
     }
 
     private func shellQuote(_ value: String) -> String {
@@ -1395,11 +1655,17 @@ public struct AndroidBuilder {
     private func manifest(product: String, hasIcon: Bool, play: PlayIntegrityVendor? = nil) -> String {
         // Referencing an absent mipmap makes aapt2 link fail.
         let iconAttr = hasIcon ? "\n                         android:icon=\"@mipmap/ic_launcher\"" : ""
+        // Debug builds can be debugged and reach a dev server over plain http (the
+        // `local` flag's LAN address). A store build does neither: Play refuses a
+        // debuggable upload.
+        let buildAttrs = release == nil
+            ? "\n                         android:debuggable=\"true\"\n                         android:usesCleartextTraffic=\"true\""
+            : "\n                         android:usesCleartextTraffic=\"false\""
         return """
         <?xml version="1.0" encoding="utf-8"?>
         <manifest xmlns:android="http://schemas.android.com/apk/res/android"
                   package="\(packageName(for: product))">
-            <uses-sdk android:minSdkVersion="28" android:targetSdkVersion="34" />
+            <uses-sdk android:minSdkVersion="28" android:targetSdkVersion="\(tools.platformAPI)" />
 
             <!-- Without this every request fails with an unhelpful error. -->
             <uses-permission android:name="android.permission.INTERNET" />
@@ -1416,9 +1682,7 @@ public struct AndroidBuilder {
 
             <application android:label="\(appName(product: product))"
                          android:theme="@android:style/Theme.DeviceDefault.Light.NoActionBar"
-                         android:extractNativeLibs="true"
-                         android:debuggable="true"
-                         android:usesCleartextTraffic="true"\(iconAttr)>
+                         android:extractNativeLibs="false"\(buildAttrs)\(iconAttr)>
                 <!-- configChanges: rotating, resizing, a keyboard coming and going, dark mode,
                      or the display size or font size changing keeps the activity. Recreating
                      it would start the engine again; omni lays the root out at the new size
@@ -1655,13 +1919,15 @@ public struct AndroidDeployer {
 
 extension AndroidBuilder {
     /// `<triple>/debug/`, or `out/Products/<Config>-android-<arch>/` from Swift 6.4.
-    static func builtLibrary(_ soName: String, in scratch: String, triple: String, fm: FileManager) -> String? {
-        let legacy = "\(scratch)/\(triple)/debug/\(soName)"
+    /// `configuration` is "debug" or "release": a scratch directory can hold both.
+    static func builtLibrary(_ soName: String, in scratch: String, triple: String,
+                             configuration: String = "debug", fm: FileManager) -> String? {
+        let legacy = "\(scratch)/\(triple)/\(configuration)/\(soName)"
         if fm.fileExists(atPath: legacy) { return legacy }
         let products = "\(scratch)/out/Products"
         let arch = triple.split(separator: "-").first.map(String.init) ?? ""
         let candidates = ((try? fm.contentsOfDirectory(atPath: products)) ?? [])
-            .filter { $0.hasSuffix("-android-\(arch)") }
+            .filter { $0.lowercased() == "\(configuration)-android-\(arch)" }
             .map { "\(products)/\($0)/\(soName)" }
             .filter { fm.fileExists(atPath: $0) }
         // Newest.

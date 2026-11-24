@@ -129,7 +129,7 @@ public enum Color: Sendable, Equatable {
             return (1.0, 0.8, 0.0, 1.0)
         case .purple:
             return (0.69, 0.32, 0.87, 1.0)
-        #if os(Android)
+        #if os(Android) || os(Windows)
         // The scheme on screen's, as the system's semantic colours are.
         case .windowBackground:
             return Appearance.current == .dark ? (0.0, 0.0, 0.0, 1.0) : (0.95, 0.95, 0.95, 1.0)

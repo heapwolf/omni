@@ -186,6 +186,13 @@ public class OmniScrollView: UIScrollView, UIScrollViewDelegate {
     /// still scrolls clear. Left at the safe area, content was cut along a
     /// line above an empty band. Its top fades under the header as it scrolls.
     private func updateSheetBleed() {
+        // Not while its sheet comes up or goes down: the sheet moves through
+        // layout after layout then, and an inset changed on the way stopped
+        // UIKit's sheet from finishing its dismissal. It sat off screen as
+        // still presented, its transition view over the window taking every
+        // touch, so nothing could be tapped after a sheet first closed.
+        // At rest again, its next layout (the first scroll) applies it.
+        if sheetInTransition { return }
         var next: CGFloat = 0
         if axis == .vertical, let host = sheetHost, let superview {
             let foot = superview.convert(frame, to: host).maxY
@@ -218,6 +225,19 @@ public class OmniScrollView: UIScrollView, UIScrollViewDelegate {
         }
     }
 
+    /// The sheet this is in is being presented or dismissed.
+    private var sheetInTransition: Bool {
+        var responder: UIResponder? = next
+        while let current = responder {
+            if let controller = current as? UIViewController {
+                return controller.sheetPresentationController != nil
+                    && (controller.isBeingPresented || controller.isBeingDismissed)
+            }
+            responder = current.next
+        }
+        return false
+    }
+
     /// The view of the sheet this is in, if it's in one.
     private var sheetHost: UIView? {
         var responder: UIResponder? = next
@@ -245,6 +265,10 @@ public class OmniScrollView: UIScrollView, UIScrollViewDelegate {
     func show(page: Int) {
         guard shownPage != page else { return }
         guard bounds.width > 0 else { pendingPage = page; return }
+        // A finger on it: its own to move. A page set from code meanwhile (the last swipe's,
+        // settled, coming back through a render) is not slid to under it; where the finger
+        // leaves it settles and is told, as any drag's.
+        if isTracking || isDragging { return }
         let isFirst = shownPage == nil
         shownPage = page
         if isFirst {
@@ -403,6 +427,18 @@ extension ScrollView {
         // Matches plain SwiftUI's own default: dragging the scroll view
         // dismisses an active keyboard interactively, tracking the drag.
         sv.keyboardDismissMode = .interactive
+        // Its pan's delays left as UIKit sets them. Both switched off (delaysTouchesEnded =
+        // false here, once), UIKit dropped the pan's delayed-touch dispatcher; a touch catching
+        // the pages as they settled after a swipe then had UIKit restart the pan and switch
+        // delaysTouchesBegan back on itself, with no dispatcher to hold the touch: it crashed
+        // (-[UIGestureRecognizer _delayTouchesForEvent:inPhase:], insertObject: nil; the
+        // recognizer's dispatcher nil, seen in lldb on device). Any touch after a swipe did it.
+        // Nor its content's touches held back while it decides whether they scroll (UIKit's
+        // delaysContentTouches: its own recognizer, delaying every touch's start). Scroll views
+        // inside one another (pages, each scrolling) and a render between two quick swipes left
+        // it holding a touch whose view was gone: the same crash. A touch that turns into a
+        // scroll still cancels what it began on (canCancelContentTouches).
+        sv.delaysContentTouches = false
         // Bounces along its axis even when everything fits, as SwiftUI's
         // ScrollView does; without it a short list can't be pulled to refresh.
         sv.alwaysBounceVertical = axis == .vertical

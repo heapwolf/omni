@@ -14,6 +14,7 @@ extension HStack {
         case .top: return .top
         case .center: return .centerY
         case .bottom: return .bottom
+        case .lastTextBaseline: return .lastBaseline
         }
     }
     #elseif os(iOS)
@@ -22,6 +23,7 @@ extension HStack {
         case .top: return .top
         case .center: return .center
         case .bottom: return .bottom
+        case .lastTextBaseline: return .lastBaseline
         }
     }
     #endif

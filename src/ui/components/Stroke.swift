@@ -34,7 +34,7 @@ public extension Shape {
     func stroke(_ color: Color, lineWidth: Double = 1) -> AnyView {
         #if os(macOS) || os(iOS)
         AnyView(ShapeStroke(outline: outline, color: color, lineWidth: lineWidth, isInset: false))
-        #elseif os(Android)
+        #elseif os(Android) || os(Windows)
         AnyView(ShapeStroke(outline: outline, color: color, lineWidth: lineWidth, isInset: false))
         #else
         AnyView(ShapeDefaultFill().border(color, width: lineWidth).clipShape(self))
@@ -45,7 +45,7 @@ public extension Shape {
     func strokeBorder(_ color: Color, lineWidth: Double = 1) -> AnyView {
         #if os(macOS) || os(iOS)
         AnyView(ShapeStroke(outline: outline, color: color, lineWidth: lineWidth, isInset: true))
-        #elseif os(Android)
+        #elseif os(Android) || os(Windows)
         AnyView(ShapeStroke(outline: outline, color: color, lineWidth: lineWidth, isInset: true))
         #else
         AnyView(ShapeDefaultFill().border(color, width: lineWidth).clipShape(self))

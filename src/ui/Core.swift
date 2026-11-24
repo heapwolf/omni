@@ -47,6 +47,8 @@ import Foundation
     public typealias NativeView = UnsafeMutableRawPointer // Maps to a JNI jobject reference
 #elseif os(Windows)
     import CWindows
+    import WinSDK
+    /// A WinView (src/ui/windows), as an opaque pointer.
     public typealias NativeView = UnsafeMutableRawPointer
     public typealias NativeStack = UnsafeMutableRawPointer
     public typealias NativeButton = UnsafeMutableRawPointer
@@ -500,7 +502,7 @@ public struct EmptyView: OmniStructuralView {
             // A single-child container throws when a replacement arrives over the old one.
             if let n = native { omni_jni_remove_view(OmniAndroid.env, n) }
         #elseif os(Windows)
-            if let n = native { omni_win_destroy(n) }
+            if let n = native { WinView.destroy(n) }
         #elseif os(macOS) || os(iOS)
             native?.removeFromSuperview()
         #else
@@ -526,7 +528,7 @@ public struct EmptyView: OmniStructuralView {
                 AndroidExpansion.clear(n)
             }
         #elseif os(Windows)
-            if let n = native { unbindWindowsEvent(n) }
+            // WinView.destroy has let the view and its controls go.
         #elseif os(macOS) || os(iOS)
             NativeOwners.forget(self)
         #else
@@ -690,7 +692,7 @@ public struct EmptyView: OmniStructuralView {
             if let owner = parent.nativeOwner, parent.native != nil {
                 #if os(macOS) || os(iOS)
                 place(child, in: parent, owner: owner, replacing: old, removal: removal, insertion: insertion)
-                #elseif os(Android)
+                #elseif os(Android) || os(Windows)
                 place(child, in: parent, owner: owner, replacing: old, removal: removal, insertion: insertion)
                 #else
                 // No positional insert here yet: rebuild the parent, which
@@ -832,6 +834,25 @@ public struct EmptyView: OmniStructuralView {
     }
     #endif
 
+    #if os(Windows)
+    /// Windows' place: the new native where the old one was among the
+    /// parent's children. No transitions yet: the swap is immediate.
+    private static func place(_ child: Node, in parent: Node, owner: any NativeComponent,
+                              replacing old: NativeView?, removal: AnyTransition?,
+                              insertion: AnyTransition?) {
+        guard let parentNative = parent.native else { return }
+        let container = WinView.from(parentNative)
+        if let old, old != child.native, let previous = WinView.existing(old), previous.parent === container {
+            previous.removeFromParent()
+        }
+        guard let new = child.native else { return }
+        let view = WinView.from(new)
+        owner.insertChild(new, into: parentNative)
+        let position = parent.kids.prefix { $0 !== child }.filter { $0.native != nil }.count
+        if view.parent === container { container.insert(view, at: position) }
+    }
+    #endif
+
     private static func renderBody(_ node: Node) {
         if let parent = Tracker.current {
             if !node.isDetachedRoot { node.parent = parent }
@@ -911,8 +932,19 @@ public struct EmptyView: OmniStructuralView {
                     let before = node.kids[i].native
                     let removal = Transaction.currentAnimation == nil ? nil : AnyTransition.on(node.kids[i])
                     node.kids[i].adopt(cv); render(node.kids[i])
+                    #if os(Windows)
+                    // A kid whose native changed in a render of its own, which
+                    // stopped short of this node (a wrapper between them showed
+                    // another native), reads as unchanged here: it is put in
+                    // place if it isn't in this node's native yet.
+                    if node.kids[i].native == before, let kidNative = node.kids[i].native,
+                       let container = node.native, WinView.existing(kidNative)?.parent !== WinView.existing(container) {
+                        place(node.kids[i], in: node, owner: nativeComp, replacing: before, removal: nil, insertion: nil)
+                        continue
+                    }
+                    #endif
                     if node.kids[i].native != before {
-                        #if os(macOS) || os(iOS) || os(Android)
+                        #if os(macOS) || os(iOS) || os(Android) || os(Windows)
                         place(node.kids[i], in: node, owner: nativeComp, replacing: before, removal: removal,
                               insertion: Transaction.currentAnimation == nil ? nil : AnyTransition.on(node.kids[i]))
                         #else
@@ -941,7 +973,7 @@ public struct EmptyView: OmniStructuralView {
                 // for a card flow, which rebuilt Cards back to its dashboard.
                 // Its native is taken out and put back in order below. Not
                 // for a navigation container, whose screens are replaced.
-                #if os(macOS) || os(iOS) || os(Android)
+                #if os(macOS) || os(iOS) || os(Android) || os(Windows)
                 let keepsKids = !((nativeComp as? ZStack)?.isNavigationContainer ?? false)
                 #else
                 let keepsKids = false
@@ -965,6 +997,8 @@ public struct EmptyView: OmniStructuralView {
                         kept.native?.removeFromSuperview()
                         #elseif os(Android)
                         if let n = kept.native { omni_jni_remove_view(OmniAndroid.env, n) }
+                        #elseif os(Windows)
+                        if let n = kept.native { WinView.from(n).removeFromParent() }
                         #endif
                         kept.adopt(cv)
                         next.append(kept)
@@ -1028,6 +1062,9 @@ public struct EmptyView: OmniStructuralView {
                         packFill(childNode.native!, into: node.native!)
                         Tracker.linuxMenuPacked.insert(ObjectIdentifier(childNode))
                     }
+                #elseif os(Windows)
+                    WinMenus.update(cmdWrapper.menus)
+                    node.native = childNode.native
                 #else
                     // No menu bar to put them in: the content alone. Without
                     // this the app's root had no native, and showed nothing.
@@ -1093,8 +1130,8 @@ public struct Window {
         }
         #elseif os(Windows)
         if let win = mainWindow {
-            if isVisible { omni_win_hide(win) }
-            else { omni_win_show(win) }
+            ShowWindow(win.assumingMemoryBound(to: HWND__.self), isVisible ? SW_HIDE : SW_SHOW)
+            if !isVisible { SetForegroundWindow(win.assumingMemoryBound(to: HWND__.self)) }
             isVisible.toggle()
         }
         #elseif os(iOS)
@@ -1114,7 +1151,8 @@ public struct Window {
         }
         #elseif os(Windows)
         if let win = mainWindow {
-            omni_win_show(win)
+            ShowWindow(win.assumingMemoryBound(to: HWND__.self), SW_SHOW)
+            SetForegroundWindow(win.assumingMemoryBound(to: HWND__.self))
             isVisible = true
         }
         #elseif os(iOS)
@@ -1130,7 +1168,7 @@ public struct Window {
         }
         #elseif os(Windows)
         if let win = mainWindow {
-            omni_win_hide(win)
+            ShowWindow(win.assumingMemoryBound(to: HWND__.self), SW_HIDE)
             isVisible = false
         }
         #elseif os(iOS)
@@ -1479,6 +1517,8 @@ public extension App {
                 ])
                 (host.superview as? OmniRootView)?.scheduleBleedRefresh()
             }
+            // The first render (see App.main): UIKit is running now.
+            if let root = Engine.root, root.native == nil { Engine.render(root) }
             Engine.rootHost?(Engine.root?.native)
 
             installKeyboardDismiss(on: vc.view)
@@ -1507,6 +1547,8 @@ public extension App {
         func installKeyboardDismiss(on view: UIView) {
             let tap = UITapGestureRecognizer(target: self, action: #selector(dismissKeyboard(_:)))
             tap.cancelsTouchesInView = false
+            // Touches not held back: see TapGesture+Apple.swift.
+            tap.delaysTouchesEnded = false
             tap.delegate = self
             view.addGestureRecognizer(tap)
         }
@@ -1559,7 +1601,17 @@ public extension App {
         Font.registerBundled()
         Engine.appName = config.title
         Engine.root = Node(appInstance)
-        Engine.render(Engine.root!)
+        #if os(iOS)
+            // Not yet on iOS: its first render is when the scene connects (OmniSceneDelegate).
+            // Built here, before UIApplicationMain, every view's gesture recognizers were made
+            // before UIKit's gesture system was, and were never registered with it (no gesture
+            // environment, no delayed-touch dispatcher; adding them to a window again later did
+            // not mend them). A touch a scroll view's pan held back then crashed UIKit: any
+            // touch catching the pages as they settled after a swipe
+            // (-[UIGestureRecognizer _delayTouchesForEvent:inPhase:], insertObject: nil).
+        #else
+            Engine.render(Engine.root!)
+        #endif
         #if os(macOS)
             // The standard menus for an app that declares none: without an
             // Edit menu, ⌘C and ⌘V do nothing in a text field.
@@ -1680,36 +1732,9 @@ public extension App {
             a.run()
 
         #elseif os(Windows)
-            let windowCallback: @convention(c) (UnsafeMutableRawPointer?, UInt32, UInt64, Int64) -> Void = { hwnd, msg, wParam, lParam in
-                switch msg {
-                case 1: // OMNI_WM_CLOSE
-                    config.onClose?()
-                    omni_win_quit_loop()
-                case 2: // OMNI_WM_SIZE
-                    if let targetHwnd = hwnd {
-                        handleWindowsEvent(v: targetHwnd, event: "resize")
-                    }
-                case 4: // OMNI_WM_COMMAND
-                    handleWindowsCommand(lParam: lParam)
-                default:
-                    break
-                }
-            }
-
-            let w = config.title.withCString { titlePtr in
-                omni_win_create_window(titlePtr, Int32(config.width), Int32(config.height), windowCallback)
-            }
-            Window.mainWindow = w
-            if !config.isResizable { omni_win_set_resizable(w, 0) }
-
-            if config.isVisible {
-                omni_win_show(w)
-                Window.isVisible = true
-            }
-
-            config.onAppear?()
-
-            omni_win_run_loop()
+            // A link for a copy already running goes to it, and this one ends.
+            if WinDeepLinks.handOff(DeepLink.launchURL(in: CommandLine.arguments)) { return }
+            WinApp.run(config)
 
         #elseif os(iOS)
             Del.config = config

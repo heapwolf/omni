@@ -77,7 +77,7 @@ extension ZStack {
         switch alignment.vertical {
         case .top: constraints.append(child.topAnchor.constraint(equalTo: parent.topAnchor))
         case .center: constraints.append(child.centerYAnchor.constraint(equalTo: parent.centerYAnchor))
-        case .bottom: constraints.append(child.bottomAnchor.constraint(equalTo: parent.bottomAnchor))
+        case .bottom, .lastTextBaseline: constraints.append(child.bottomAnchor.constraint(equalTo: parent.bottomAnchor))
         }
 
         // 900 matches what VStack/HStack give a filling child, so the three
