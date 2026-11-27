@@ -26,9 +26,30 @@ struct OmniManifest: Decodable {
     /// library, Face ID) and adds any other (NSLocalNetworkUsageDescription, ...).
     /// Only `NS...UsageDescription` keys; others are ignored.
     var usageDescriptions: [String: String]?
+    /// Push notifications (OmniPush). iOS needs nothing here: APNs comes with the provisioning
+    /// profile's Push Notifications capability, and a device build says when it lacks it. Android's
+    /// are the Google project's public ids, which every app ships and are safe to commit:
+    /// `{"android": {"projectID", "appID", "apiKey", "senderID"}, "channelName": "Alerts"}`. Restrict
+    /// the API key in Google's console to the Installations API and this app's package and
+    /// certificate. Without `android`, no push is built into the manifest.
+    var push: Push?
 
     struct PlayIntegrity: Decodable {
         var cloudProjectNumber: String
+    }
+
+    struct Push: Decodable {
+        var android: Android?
+        /// Android's channel, as Settings lists it.
+        var channelName: String?
+
+        struct Android: Decodable {
+            var projectID: String
+            var appID: String
+            var apiKey: String
+            /// The project's number.
+            var senderID: String
+        }
     }
 
     static func load(from appPath: String) -> OmniManifest {

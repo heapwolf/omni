@@ -2516,6 +2516,11 @@ public class OmniEventBridge {
 
     /// Called from the generated MainActivity's onRequestPermissionsResult.
     public static void onRequestPermissionsResult(int requestCode, int[] grantResults) {
+        // OmniPush's own request: it waits on a thread of its own, not on a pointer.
+        if (requestCode == OmniPush.PERMISSION_REQUEST) {
+            OmniPush.permissionResult(grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED);
+            return;
+        }
         long ptr = pendingPermissionPtr;
         pendingPermissionPtr = 0;
         if (ptr == 0) return;

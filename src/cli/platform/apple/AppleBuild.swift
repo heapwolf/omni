@@ -243,6 +243,11 @@ public struct AppleBuilder {
            !granted.contains("com.apple.developer.applesignin") {
             Console.warning("omni.json asks for Sign in with Apple, but the provisioning profile doesn't grant it: turn on Sign in with Apple for the App ID in Apple's developer portal, then run omni provision again. Until then it fails on this device.")
         }
+        if OmniManifest.load(from: path).push != nil,
+           let granted = try? String(contentsOfFile: "\(iosDir)/Entitlements.plist", encoding: .utf8),
+           !granted.contains("aps-environment") {
+            Console.warning("omni.json asks for push, but the provisioning profile doesn't grant it: turn on Push Notifications for the App ID in Apple's developer portal, then run omni provision again. Until then OmniPush finds no token on this device.")
+        }
 
         Console.info("Code signing for iOS Device...")
         let identity = try signingIdentity(profilePlist: "\(iosDir)/profile.plist", scratch: iosDir)

@@ -228,5 +228,6 @@ uint8_t* omni_jni_approval_key_sign(const char *tag, const uint8_t *message, int
 /// when the app wasn't built with it or it failed. Blocks: call it on a
 /// thread of its own, which this attaches to the VM and detaches again.
 char*    omni_jni_attest_token(const char *requestHash);
+char*    omni_jni_push_token(int prompting);
 
 #endif // OMNI_JNIBRIDGE_H

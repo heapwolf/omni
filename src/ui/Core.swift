@@ -1459,6 +1459,15 @@ public extension App {
         func applicationWillTerminate(_ application: UIApplication) {
             Del.config?.onClose?()
         }
+
+        // Push: the device token, or why there's none (RemoteNotifications, for OmniPush).
+        func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+            RemoteNotifications.finished(.success(deviceToken))
+        }
+
+        func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: any Error) {
+            RemoteNotifications.finished(.failure(error))
+        }
     }
 
     /// The window and its root view, made when the system connects the app's

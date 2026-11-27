@@ -2007,6 +2007,56 @@ char* omni_jni_attest_token(const char *requestHash) {
     return result;
 }
 
+/// OmniPush's token (src/ui/android/OmniPush.java): "token:<token>", "denied", "not-asked", or
+/// "unavailable:<why>"; NULL without an activity. Blocks: called off the main thread.
+char* omni_jni_push_token(int prompting) {
+    if (!global_jvm || !global_activity) return NULL;
+    JNIEnv *env = NULL;
+    int attached = 0;
+    if ((*global_jvm)->GetEnv(global_jvm, (void **)&env, JNI_VERSION_1_6) == JNI_EDETACHED) {
+        if ((*global_jvm)->AttachCurrentThread(global_jvm, &env, NULL) != JNI_OK) return NULL;
+        attached = 1;
+    }
+    char *result = NULL;
+
+    // The app's class loader: FindClass on an attached thread sees only the system's.
+    jclass activityClass = (*env)->GetObjectClass(env, global_activity);
+    jmethodID getLoader = (*env)->GetMethodID(env, activityClass, "getClassLoader", "()Ljava/lang/ClassLoader;");
+    jobject loader = getLoader ? (*env)->CallObjectMethod(env, global_activity, getLoader) : NULL;
+    omni_jni_clear_pending(env);
+    jclass loaderClass = loader ? (*env)->GetObjectClass(env, loader) : NULL;
+    jmethodID loadClass = loaderClass
+        ? (*env)->GetMethodID(env, loaderClass, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;") : NULL;
+    jstring name = (*env)->NewStringUTF(env, "com.omni.OmniPush");
+    jclass clazz = loadClass ? (jclass)(*env)->CallObjectMethod(env, loader, loadClass, name) : NULL;
+    omni_jni_clear_pending(env);
+
+    jmethodID token = clazz ? (*env)->GetStaticMethodID(env, clazz, "token",
+        "(Landroid/app/Activity;Z)Ljava/lang/String;") : NULL;
+    omni_jni_clear_pending(env);
+    if (token) {
+        jstring value = (jstring)(*env)->CallStaticObjectMethod(env, clazz, token, global_activity,
+                                                                 (jboolean)(prompting ? JNI_TRUE : JNI_FALSE));
+        omni_jni_clear_pending(env);
+        if (value) {
+            const char *chars = (*env)->GetStringUTFChars(env, value, NULL);
+            if (chars) {
+                result = strdup(chars);
+                (*env)->ReleaseStringUTFChars(env, value, chars);
+            }
+            (*env)->DeleteLocalRef(env, value);
+        }
+    }
+
+    (*env)->DeleteLocalRef(env, name);
+    if (clazz) (*env)->DeleteLocalRef(env, clazz);
+    if (loaderClass) (*env)->DeleteLocalRef(env, loaderClass);
+    if (loader) (*env)->DeleteLocalRef(env, loader);
+    (*env)->DeleteLocalRef(env, activityClass);
+    if (attached) (*global_jvm)->DetachCurrentThread(global_jvm);
+    return result;
+}
+
 uint8_t* omni_jni_read_uri(JNIEnv *env, jobject activity, const char* uri, int* outLength) {
     *outLength = 0;
     jclass bridgeClass = omni_jni_app_class(env, "com/omni/OmniEventBridge");

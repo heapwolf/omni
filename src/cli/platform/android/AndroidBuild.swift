@@ -1652,7 +1652,57 @@ public struct AndroidBuilder {
         target == "App" ? product : target
     }
 
-    private func manifest(product: String, hasIcon: Bool, play: PlayIntegrityVendor? = nil) -> String {
+    /// omni.json's push for Android, checked: each a manifest attribute, so no character that
+    /// would end one.
+    private func pushConfig() throws -> (android: OmniManifest.Push.Android, channel: String)? {
+        guard let push = OmniManifest.load(from: path).push, let android = push.android else { return nil }
+        let channel = push.channelName ?? "Notifications"
+        for (name, value) in [("projectID", android.projectID), ("appID", android.appID), ("apiKey", android.apiKey),
+                              ("senderID", android.senderID), ("channelName", channel)] {
+            guard !value.isEmpty, !value.contains(where: { "\"<>&'".contains($0) || $0.isNewline }) else {
+                throw AndroidError.missing("omni.json: push.\(name) is empty or has a quote, angle bracket or ampersand")
+            }
+        }
+        guard android.senderID.allSatisfy(\.isNumber) else {
+            throw AndroidError.missing("omni.json: push.android.senderID is the project's number, digits only")
+        }
+        return (android, channel)
+    }
+
+    /// Notifications (asked for at runtime) and Play services' delivery.
+    private func pushPermissions() throws -> String {
+        guard try pushConfig() != nil else { return "" }
+        return """
+
+
+            <!-- Push (OmniPush): showing a notification, asked for when the app asks; and Play
+                 services' delivery to this app. -->
+            <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+            <uses-permission android:name="com.google.android.c2dm.permission.RECEIVE" />
+        """
+    }
+
+    /// The project's ids, and the one receiver: exported, but only Play services holds the
+    /// permission that reaches it. No service, no provider, nothing that starts on its own.
+    private func pushEntries() throws -> String {
+        guard let (android, channel) = try pushConfig() else { return "" }
+        return """
+
+                <meta-data android:name="omni.push.project_id" android:value="\(android.projectID)" />
+                <meta-data android:name="omni.push.app_id" android:value="\(android.appID)" />
+                <meta-data android:name="omni.push.api_key" android:value="\(android.apiKey)" />
+                <meta-data android:name="omni.push.sender" android:value="sender:\(android.senderID)" />
+                <meta-data android:name="omni.push.channel" android:value="\(channel)" />
+                <receiver android:name="com.omni.OmniPush$Receiver" android:exported="true"
+                          android:permission="com.google.android.c2dm.permission.SEND">
+                    <intent-filter>
+                        <action android:name="com.google.android.c2dm.intent.RECEIVE" />
+                    </intent-filter>
+                </receiver>
+        """
+    }
+
+    private func manifest(product: String, hasIcon: Bool, play: PlayIntegrityVendor? = nil) throws -> String {
         // Referencing an absent mipmap makes aapt2 link fail.
         let iconAttr = hasIcon ? "\n                         android:icon=\"@mipmap/ic_launcher\"" : ""
         // Debug builds can be debugged and reach a dev server over plain http (the
@@ -1678,7 +1728,7 @@ public struct AndroidBuilder {
             <uses-permission android:name="android.permission.USE_BIOMETRIC" />
 
             <!-- Haptics with a shape (a success's two pulses): granted at install, no prompt. -->
-            <uses-permission android:name="android.permission.VIBRATE" />
+            <uses-permission android:name="android.permission.VIBRATE" />\(try pushPermissions())
 
             <application android:label="\(appName(product: product))"
                          android:theme="@android:style/Theme.DeviceDefault.Light.NoActionBar"
@@ -1702,7 +1752,7 @@ public struct AndroidBuilder {
                 <provider android:name="com.omni.OmniFileProvider"
                           android:authorities="\(packageName(for: product)).omnifileprovider"
                           android:exported="false"
-                          android:grantUriPermissions="true" />\(play?.manifestEntries ?? "")
+                          android:grantUriPermissions="true" />\(play?.manifestEntries ?? "")\(try pushEntries())
             </application>
         </manifest>
         """
